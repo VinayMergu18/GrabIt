@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GrabIt</title>
+<style>
+  /* ── Reset & tokens ───────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0e0e10;
+    --bg2: #18181b;
+    --bg3: #232329;
+    --bg4: #2d2d35;
+    --border: #2e2e38;
+    --text: #f0f0f4;
+    --text2: #9898a8;
+    --text3: #5a5a6a;
+    --accent: #7c6af7;
+    --accent-h: #6b58e8;
+    --green: #22c55e;
+    --red: #ef4444;
+    --yellow: #f59e0b;
+    --blue: #3b82f6;
+    --yt: #ff2020;
+    --ig: #e1306c;
+    --generic: #7c6af7;
+    --radius: 6px;
+    --radius-lg: 10px;
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --mono: 'JetBrains Mono', 'Consolas', monospace;
+    --transition: 120ms ease;
+  }
+
+  html { font-family: var(--font); font-size: 13px; }
+  body { background: var(--bg); color: var(--text); width: 400px; min-height: 460px; max-height: 600px; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* ── Header ───────────────────────────────────────────────────── */
+  #header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 12px 8px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  #logo {
+    display: flex; align-items: center; gap: 7px;
+    font-weight: 700; font-size: 14px; letter-spacing: -0.3px;
+  }
+  #logo svg { color: var(--accent); }
+  #server-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--text3); transition: background var(--transition);
+  }
+  #server-dot.online { background: var(--green); }
+  #server-dot.offline { background: var(--red); }
+
+  /* ── Tab bar ──────────────────────────────────────────────────── */
+  #tabs {
+    display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .tab-btn {
+    flex: 1; padding: 9px 4px; background: none; border: none;
+    color: var(--text3); font: inherit; font-size: 12px; font-weight: 600;
+    cursor: pointer; position: relative; transition: color var(--transition);
+    letter-spacing: 0.3px;
+  }
+  .tab-btn:hover { color: var(--text2); }
+  .tab-btn.active { color: var(--text); }
+  .tab-btn.active::after {
+    content: ''; position: absolute; bottom: 0; left: 10%; right: 10%;
+    height: 2px; border-radius: 2px 2px 0 0;
+  }
+  .tab-btn[data-tab="youtube"].active { color: var(--yt); }
+  .tab-btn[data-tab="youtube"].active::after { background: var(--yt); }
+  .tab-btn[data-tab="instagram"].active { color: var(--ig); }
+  .tab-btn[data-tab="instagram"].active::after { background: var(--ig); }
+  .tab-btn[data-tab="generic"].active { color: var(--accent); }
+  .tab-btn[data-tab="generic"].active::after { background: var(--accent); }
+  .tab-btn[data-tab="queue"].active { color: var(--blue); }
+  .tab-btn[data-tab="queue"].active::after { background: var(--blue); }
+  .tab-btn[data-tab="history"].active { color: var(--text); }
+  .tab-btn[data-tab="history"].active::after { background: var(--text3); }
+  .tab-btn[data-tab="settings"].active { color: var(--text); }
+  .tab-btn[data-tab="settings"].active::after { background: var(--text3); }
+
+  .tab-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 16px; height: 16px; border-radius: 8px;
+    background: var(--accent); color: #fff; font-size: 10px; font-weight: 700;
+    margin-left: 4px; padding: 0 4px;
+  }
+
+  /* ── Panels ───────────────────────────────────────────────────── */
+  #panels { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+  .panel { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+  .panel.active { display: flex; }
+
+  .panel-scroll { flex: 1; overflow-y: auto; padding: 10px 12px; }
+  .panel-scroll::-webkit-scrollbar { width: 4px; }
+  .panel-scroll::-webkit-scrollbar-track { background: transparent; }
+  .panel-scroll::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 2px; }
+
+  /* ── Server offline banner ────────────────────────────────────── */
+  #offline-banner {
+    display: none; align-items: center; gap: 8px;
+    background: #1a0f0f; border: 1px solid #3d1515; border-radius: var(--radius);
+    padding: 8px 10px; margin-bottom: 10px; color: #f87171; font-size: 12px;
+  }
+  #offline-banner.visible { display: flex; }
+
+  /* ── Media card ───────────────────────────────────────────────── */
+  .media-card {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 10px; margin-bottom: 8px;
+  }
+  .media-card-inner { display: flex; gap: 10px; align-items: flex-start; }
+  .thumb-wrap {
+    width: 72px; height: 54px; border-radius: 5px; overflow: hidden;
+    flex-shrink: 0; background: var(--bg3);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .thumb-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb-placeholder { color: var(--text3); }
+  .media-meta { flex: 1; min-width: 0; }
+  .media-title {
+    font-weight: 600; font-size: 12.5px; line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    margin-bottom: 3px;
+  }
+  .media-sub {
+    font-size: 11px; color: var(--text2); display: flex; gap: 8px; flex-wrap: wrap;
+    align-items: center;
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 2px 6px; border-radius: 4px; font-size: 10.5px; font-weight: 600;
+    background: var(--bg3); color: var(--text2);
+  }
+  .pill.yt { background: #1a0808; color: var(--yt); }
+  .pill.ig { background: #1a0810; color: var(--ig); }
+  .pill.green { background: #0a1a10; color: var(--green); }
+  .pill.blue { background: #080f1a; color: var(--blue); }
+
+  /* ── Carousel slide selector grid ────────────────────────────── */
+  .slide-selector-label {
+    font-size: 11px; color: var(--text2); margin: 8px 0 5px;
+  }
+  .slide-selector-grid {
+    display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px;
+  }
+  .slide-btn {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 2px;
+    width: 40px; height: 44px; border-radius: var(--radius);
+    background: var(--bg3); border: 1px solid var(--border);
+    cursor: pointer; transition: all var(--transition);
+    font-size: 11px; color: var(--text2);
+  }
+  .slide-btn:hover { border-color: var(--accent); background: var(--bg4); }
+  .slide-btn.active { border-color: var(--accent); background: var(--accent); color: #fff; }
+  .slide-btn.active .slide-num { color: #fff; }
+  .slide-num { font-size: 12px; font-weight: 600; color: var(--text1); line-height: 1; }
+  .slide-type-icon { font-size: 13px; line-height: 1; }
+  .slide-actions-panel {
+    background: var(--bg3); border-radius: var(--radius);
+    padding: 8px; margin: 4px 0 6px; border: 1px solid var(--border);
+  }
+  .slide-panel-title {
+    font-size: 12px; font-weight: 600; color: var(--text1);
+    margin-bottom: 6px;
+  }
+
+
+  /* ── Action buttons ───────────────────────────────────────────── */
+  .actions { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+  .btn {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-radius: var(--radius); border: none;
+    font: inherit; font-size: 12.5px; font-weight: 600;
+    cursor: pointer; transition: all var(--transition);
+    position: relative; overflow: hidden;
+  }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-h); }
+  .btn-secondary { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+  .btn-secondary:hover:not(:disabled) { background: var(--bg4); }
+  .btn-danger { background: #1a0808; color: var(--red); border: 1px solid #3d1515; }
+  .btn-danger:hover:not(:disabled) { background: #250a0a; }
+  .btn-icon { width: 14px; height: 14px; flex-shrink: 0; }
+  .btn-label { flex: 1; text-align: left; }
+  .btn-size { font-size: 10.5px; color: var(--text3); font-weight: 400; }
+
+  .action-group { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+
+  /* ── YouTube 3-tab quality UI ─────────────────────────────────── */
+  .yt-tab-bar { display: flex; gap: 2px; margin: 6px 0 4px; background: var(--bg3); border-radius: var(--radius); padding: 3px; border: 1px solid var(--border); }
+  .yt-tab { flex: 1; padding: 5px 2px; border-radius: 4px; border: none; background: transparent; color: var(--text2); font: inherit; font-size: 10.5px; font-weight: 500; cursor: pointer; transition: all var(--transition); white-space: nowrap; }
+  .yt-tab:hover { color: var(--text); background: var(--bg4); }
+  .yt-tab.active { background: var(--accent); color: #fff; }
+  .yt-tab-panel { margin-top: 2px; }
+  .yt-quality-label { font-size: 10.5px; color: var(--text2); margin: 5px 0 3px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .yt-quality-list { display: flex; flex-direction: column; gap: 3px; }
+  .yt-quality-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--radius); background: var(--bg3); border: 1px solid var(--border); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; transition: all var(--transition); width: 100%; text-align: left; }
+  .yt-quality-row:hover:not(:disabled) { background: var(--bg4); border-color: var(--accent); }
+  .yt-quality-row:active:not(:disabled) { transform: scale(0.99); }
+  .yt-q-idx { font-family: var(--mono, monospace); font-size: 10.5px; color: var(--text3); min-width: 20px; }
+  .yt-q-label { flex: 1; font-weight: 500; }
+  .yt-q-size { font-size: 11px; color: var(--text2); }
+  .yt-q-star { border-color: var(--accent); background: rgba(139,92,246,0.08); }
+  .yt-q-special { border-style: dashed; }
+  .yt-q-disabled { opacity: 0.4; cursor: not-allowed !important; }
+
+  /* ── Carousel slide selector ──────────────────────────────────── */
+  .slide-selector-label { font-size: 11px; color: var(--text2); margin: 7px 0 4px; }
+  .slide-selector-grid { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 5px; }
+  .slide-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; width: 40px; height: 44px; border-radius: var(--radius); background: var(--bg3); border: 1px solid var(--border); cursor: pointer; transition: all var(--transition); }
+  .slide-btn:hover { border-color: var(--accent); background: var(--bg4); }
+  .slide-btn.active { border-color: var(--accent); background: var(--accent); color: #fff; }
+  .slide-btn .slide-num { font-size: 12px; font-weight: 600; line-height: 1; }
+  .slide-btn .slide-type-icon { font-size: 11px; line-height: 1; }
+  .slide-actions-panel { background: var(--bg3); border-radius: var(--radius); padding: 8px; margin: 3px 0 5px; border: 1px solid var(--border); }
+  .slide-panel-title { font-size: 12px; font-weight: 600; color: var(--text1, var(--text)); margin-bottom: 6px; }
+
+  /* ── Instagram type tabs (Reel / Photos) ──────────────────────── */
+  .ig-type-bar { display: flex; gap: 4px; margin: 6px 0 8px; }
+  .ig-type-tab {
+    flex: 1; padding: 9px 8px; border-radius: var(--radius); border: 1px solid var(--border);
+    background: var(--bg3); color: var(--text2); font: inherit; font-size: 12px; font-weight: 600;
+    cursor: pointer; transition: all var(--transition);
+  }
+  .ig-type-tab:hover { background: var(--bg4); }
+  .ig-type-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .ig-tab-panel { margin-top: 4px; }
+  .ig-section-label { font-size: 11.5px; color: var(--text2); margin-bottom: 2px; }
+
+  .ig-slide-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .ig-slide-label { font-size: 11.5px; color: var(--text2); white-space: nowrap; }
+  .ig-slide-input-wrap { display: flex; align-items: center; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .ig-slide-btn {
+    width: 26px; height: 28px; border: none; background: var(--bg3); color: var(--text);
+    font-size: 15px; cursor: pointer; transition: background var(--transition); line-height: 1;
+  }
+  .ig-slide-btn:hover { background: var(--bg4); }
+  .ig-slide-num-input {
+    width: 42px; height: 28px; border: none; border-left: 1px solid var(--border); border-right: 1px solid var(--border);
+    background: var(--bg2); color: var(--text); text-align: center; font: inherit; font-size: 13px;
+    -moz-appearance: textfield;
+  }
+  .ig-slide-num-input::-webkit-outer-spin-button, .ig-slide-num-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .ig-slide-num-input:focus { outline: none; }
+  .ig-slide-hint { font-size: 10.5px; color: var(--text3); }
+  .ig-url-display {
+    margin-top: 10px; padding: 6px 9px; background: var(--bg3); border-radius: var(--radius);
+    font-size: 10.5px; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    border: 1px solid var(--border);
+  }
+
+  /* ── Format selector ──────────────────────────────────────────── */
+  .select-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .select-row label { font-size: 11.5px; color: var(--text2); white-space: nowrap; }
+  select {
+    background: var(--bg3); color: var(--text); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 5px 8px; font: inherit; font-size: 12px;
+    flex: 1; cursor: pointer;
+  }
+  select:focus { outline: 1px solid var(--accent); }
+
+  /* ── URL input mode ───────────────────────────────────────────── */
+  .url-input-wrap { display: flex; gap: 6px; margin-bottom: 10px; }
+  .url-input {
+    flex: 1; background: var(--bg3); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 7px 10px; font: inherit; font-size: 12.5px;
+  }
+  .url-input:focus { outline: 1px solid var(--accent); }
+  .url-input::placeholder { color: var(--text3); }
+
+  /* ── Queue items ──────────────────────────────────────────────── */
+  .queue-item {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 9px 10px; margin-bottom: 6px;
+  }
+  .qi-header { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+  .qi-title { flex: 1; font-weight: 600; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qi-status { font-size: 11px; color: var(--text3); }
+  .qi-status.downloading { color: var(--blue); }
+  .qi-status.complete { color: var(--green); }
+  .qi-status.failed { color: var(--red); }
+  .qi-status.queued { color: var(--yellow); }
+
+  .progress-bar-wrap {
+    height: 3px; background: var(--bg4); border-radius: 2px; margin: 5px 0; overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%; border-radius: 2px; background: var(--blue);
+    transition: width 200ms linear; width: 0%;
+  }
+  .progress-bar.complete { background: var(--green); }
+
+  .qi-meta { display: flex; justify-content: space-between; font-size: 11px; color: var(--text3); }
+  .qi-actions { display: flex; gap: 5px; margin-top: 6px; }
+  .qi-btn {
+    padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border);
+    background: none; color: var(--text2); font: inherit; font-size: 11px;
+    cursor: pointer; transition: all var(--transition);
+  }
+  .qi-btn:hover { background: var(--bg4); color: var(--text); }
+  .qi-btn.danger { color: var(--red); border-color: #3d1515; }
+  .qi-btn.danger:hover { background: #1a0808; }
+  .qi-btn.success { color: var(--green); border-color: #0a3d1a; }
+
+  /* ── History ──────────────────────────────────────────────────── */
+  .hist-search {
+    display: flex; gap: 6px; margin-bottom: 8px;
+  }
+  .hist-item {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 8px 10px; margin-bottom: 5px;
+    cursor: default;
+  }
+  .hist-item:hover { background: var(--bg3); }
+  .hist-icon { flex-shrink: 0; color: var(--text3); }
+  .hist-body { flex: 1; min-width: 0; }
+  .hist-title { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hist-meta { font-size: 11px; color: var(--text3); display: flex; gap: 6px; margin-top: 2px; }
+  .hist-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .hist-btn {
+    padding: 3px 7px; border-radius: 4px; border: 1px solid var(--border);
+    background: none; color: var(--text3); font: inherit; font-size: 11px; cursor: pointer;
+    transition: all var(--transition);
+  }
+  .hist-btn:hover { background: var(--bg4); color: var(--text); }
+  .verified-badge { color: var(--green); font-size: 10.5px; }
+  .failed-badge { color: var(--red); font-size: 10.5px; }
+
+  /* ── Settings ─────────────────────────────────────────────────── */
+  .settings-section { margin-bottom: 14px; }
+  .settings-section-title {
+    font-size: 11px; font-weight: 700; color: var(--text3); letter-spacing: 0.8px;
+    text-transform: uppercase; margin-bottom: 8px; padding-bottom: 5px;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 0; gap: 8px;
+  }
+  .settings-label { font-size: 12.5px; flex: 1; }
+  .settings-sub { font-size: 11px; color: var(--text3); margin-top: 1px; }
+  .toggle {
+    position: relative; width: 32px; height: 18px; flex-shrink: 0; cursor: pointer;
+  }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-track {
+    position: absolute; inset: 0; border-radius: 9px;
+    background: var(--bg4); transition: background var(--transition);
+  }
+  .toggle input:checked + .toggle-track { background: var(--accent); }
+  .toggle-thumb {
+    position: absolute; top: 3px; left: 3px; width: 12px; height: 12px;
+    border-radius: 50%; background: white; transition: left var(--transition);
+  }
+  .toggle input:checked ~ .toggle-thumb { left: 17px; }
+
+  .settings-input {
+    background: var(--bg3); color: var(--text); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 5px 8px; font: inherit; font-size: 12px;
+    width: 100%;
+  }
+  .settings-input:focus { outline: 1px solid var(--accent); }
+  .settings-select {
+    background: var(--bg3); color: var(--text); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 5px 8px; font: inherit; font-size: 12px;
+    min-width: 110px;
+  }
+  .folder-row { display: flex; gap: 5px; }
+  .folder-row .settings-input { flex: 1; }
+
+  .settings-tabs { display: flex; gap: 0; margin-bottom: 10px; background: var(--bg3); border-radius: var(--radius); padding: 2px; }
+  .settings-tab-btn {
+    flex: 1; padding: 5px; border-radius: 4px; border: none; background: none;
+    color: var(--text3); font: inherit; font-size: 11.5px; font-weight: 600;
+    cursor: pointer; transition: all var(--transition);
+  }
+  .settings-tab-btn.active { background: var(--bg); color: var(--text); }
+
+  /* ── Empty states ─────────────────────────────────────────────── */
+  .empty {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; padding: 30px 20px; color: var(--text3); text-align: center;
+  }
+  .empty svg { opacity: 0.3; }
+  .empty p { font-size: 12px; }
+
+  /* ── Spinner ──────────────────────────────────────────────────── */
+  .spinner {
+    width: 16px; height: 16px; border: 2px solid var(--bg4);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin 0.7s linear infinite; flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Toast ────────────────────────────────────────────────────── */
+  #toast {
+    position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 7px 14px; font-size: 12px; color: var(--text);
+    opacity: 0; transition: all 200ms ease; pointer-events: none; white-space: nowrap;
+    z-index: 100;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.success { border-color: var(--green); color: var(--green); }
+  #toast.error { border-color: var(--red); color: var(--red); }
+
+  /* ── Skeleton loader ──────────────────────────────────────────── */
+  .skeleton {
+    background: linear-gradient(90deg, var(--bg3) 25%, var(--bg4) 50%, var(--bg3) 75%);
+    background-size: 200% 100%; border-radius: 4px;
+    animation: shimmer 1.2s infinite;
+  }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+  .skel-title { height: 13px; width: 75%; margin-bottom: 5px; }
+  .skel-sub { height: 11px; width: 40%; }
+  .skel-thumb { width: 72px; height: 54px; border-radius: 5px; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div id="header">
+  <div id="logo">
+    <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+    </svg>
+    GrabIt
+  </div>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span id="server-label" style="font-size:11px;color:var(--text3)">connecting</span>
+    <div id="server-dot"></div>
+  </div>
+</div>
+
+<!-- Tab bar -->
+<div id="tabs">
+  <button class="tab-btn active" data-tab="youtube" title="YouTube">YT</button>
+  <button class="tab-btn" data-tab="instagram" title="Instagram">IG</button>
+  <button class="tab-btn" data-tab="generic" title="Other Sites">Web</button>
+  <button class="tab-btn" data-tab="streams" title="Detected Streams" id="streams-tab-btn">📡</button>
+  <button class="tab-btn" data-tab="queue">
+    Queue<span class="tab-badge" id="queue-count" style="display:none">0</span>
+  </button>
+  <button class="tab-btn" data-tab="history">Log</button>
+  <button class="tab-btn" data-tab="settings">⚙</button>
+</div>
+
+<!-- Panels container -->
+<div id="panels">
+
+  <!-- ── YOUTUBE PANEL ── -->
+  <div class="panel active" id="panel-youtube">
+    <div class="panel-scroll">
+      <div id="yt-offline-banner" class="offline-banner" style="display:none;background:#1a0808;border:1px solid #3d1515;border-radius:6px;padding:8px 10px;margin-bottom:8px;color:#f87171;font-size:12px;">
+        Server offline — start the server first
+      </div>
+      <div id="yt-url-input-wrap" class="url-input-wrap" style="display:none;">
+        <input type="url" class="url-input" id="yt-url-input" placeholder="Paste YouTube URL...">
+        <button class="btn btn-secondary" id="yt-url-go" style="padding:7px 10px;white-space:nowrap;">Probe</button>
+      </div>
+      <div id="yt-loading" style="display:none;">
+        <div class="media-card">
+          <div class="media-card-inner">
+            <div class="skel-thumb skeleton"></div>
+            <div style="flex:1">
+              <div class="skel-title skeleton"></div>
+              <div class="skel-sub skeleton"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="yt-content"></div>
+    </div>
+  </div>
+
+  <!-- ── INSTAGRAM PANEL ── -->
+  <div class="panel" id="panel-instagram">
+    <div class="panel-scroll">
+      <div id="ig-url-input-wrap" class="url-input-wrap" style="display:none;">
+        <input type="url" class="url-input" id="ig-url-input" placeholder="Paste Instagram URL...">
+        <button class="btn btn-secondary" id="ig-url-go" style="padding:7px 10px;white-space:nowrap;">Probe</button>
+      </div>
+      <div id="ig-loading" style="display:none;">
+        <div class="media-card"><div class="media-card-inner"><div class="skel-thumb skeleton"></div><div style="flex:1"><div class="skel-title skeleton"></div><div class="skel-sub skeleton"></div></div></div></div>
+      </div>
+      <div id="ig-content"></div>
+    </div>
+  </div>
+
+  <!-- ── GENERIC PANEL ── -->
+  <div class="panel" id="panel-generic">
+    <div class="panel-scroll">
+      <div id="gen-url-input-wrap" class="url-input-wrap" style="display:none;">
+        <input type="url" class="url-input" id="gen-url-input" placeholder="Paste any media URL...">
+        <button class="btn btn-secondary" id="gen-url-go" style="padding:7px 10px;white-space:nowrap;">Probe</button>
+      </div>
+      <div id="gen-loading" style="display:none;">
+        <div class="media-card"><div class="media-card-inner"><div class="skel-thumb skeleton"></div><div style="flex:1"><div class="skel-title skeleton"></div><div class="skel-sub skeleton"></div></div></div></div>
+      </div>
+      <div id="gen-content"></div>
+    </div>
+  </div>
+
+  <!-- ── QUEUE PANEL ── -->
+  <div class="panel" id="panel-queue">
+    <div class="panel-scroll">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span style="font-size:12px;font-weight:700;color:var(--text2)">DOWNLOADS</span>
+        <button class="qi-btn" id="clear-completed-btn" style="font-size:11px">Clear done</button>
+      </div>
+      <div id="queue-list"></div>
+    </div>
+  </div>
+
+  <!-- ── HISTORY PANEL ── -->
+  <div class="panel" id="panel-history">
+    <div class="panel-scroll">
+      <div class="hist-search">
+        <input class="url-input" id="hist-search" placeholder="Search history..." style="flex:1">
+        <button class="qi-btn danger" id="clear-hist-btn">Clear all</button>
+      </div>
+      <div id="history-list"></div>
+    </div>
+  </div>
+
+  <!-- ── SETTINGS PANEL ── -->
+  <div class="panel" id="panel-settings">
+    <div class="panel-scroll">
+      <div class="settings-tabs">
+        <button class="settings-tab-btn active" data-stab="youtube">YouTube</button>
+        <button class="settings-tab-btn" data-stab="instagram">Instagram</button>
+        <button class="settings-tab-btn" data-stab="generic">Web</button>
+        <button class="settings-tab-btn" data-stab="app">App</button>
+      </div>
+      <div id="settings-content"></div>
+    </div>
+  </div>
+
+  <!-- ── STREAMS PANEL ── -->
+  <div class="panel" id="panel-streams">
+    <div class="panel-scroll">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 2px 4px">
+        <span style="font-size:12px;font-weight:600;color:var(--text)">📡 Detected Streams</span>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-secondary" id="streams-refresh" style="font-size:11px;padding:3px 9px" title="Re-scan page">🔄 Refresh</button>
+          <button class="btn btn-secondary" id="streams-clear"   style="font-size:11px;padding:3px 9px" title="Clear list">✕ Clear</button>
+        </div>
+      </div>
+      <div id="streams-content">
+        <div style="padding:14px;color:var(--text3);font-size:12px;text-align:center">Click 🔄 to scan this page for media streams</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div id="toast"></div>
+
+<script src="../scripts/popup/popup.js"></script>
+</body>
+</html>
