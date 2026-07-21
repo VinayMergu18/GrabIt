@@ -1,0 +1,63 @@
+{
+  "youtube": {
+    "downloadFolder": "V:\\GrabIt",
+    "defaultQuality": "best",
+    "preferredVideoFormat": "mp4",
+    "preferredAudioFormat": "mp3",
+    "embedSubtitles": false,
+    "autoSubtitleLang": "en",
+    "concurrentDownloads": 2,
+    "retryCount": 3,
+    "autoRetry": true,
+    "sponsorBlock": false,
+    "customArgs": "",
+    "cookieSource": "auto"
+  },
+  "instagram": {
+    "downloadFolder": "V:\\GrabIt",
+    "preferredVideoQuality": "best",
+    "preferredAudioFormat": "mp3",
+    "createCarouselFolders": true,
+    "downloadStories": true,
+    "concurrentDownloads": "3",
+    "retryCount": "2",
+    "autoRetry": true,
+    "cookieSource": "auto",
+    "sessionFile": "",
+    "customArgs": "",
+    "loginUsername": "",
+    "loginPassword": "",
+    "loginUseSession": false
+  },
+  "generic": {
+    "downloadFolder": "V:\\GrabIt",
+    "preferredVideoFormat": "mp4",
+    "preferredAudioFormat": "mp3",
+    "maxResolution": "1080",
+    "concurrentDownloads": 2,
+    "retryCount": 3,
+    "autoRetry": true,
+    "customArgs": "",
+    "timeout": 30
+  },
+  "app": {
+    "urlInputMode": false,
+    "showVerificationBadge": true,
+    "theme": "dark",
+    "notificationsEnabled": true,
+    "openFolderAfterDownload": true,
+    "language": "en",
+    "checkForUpdates": true,
+    "notifyOnCompletion": true,
+    "maxConcurrentDownloads": 2,
+    "maxRetries": 3,
+    "cookiePlatform": "all",
+    "cookieFilePath": ""
+  },
+  "logging": {
+    "enabled": true,
+    "level": "info",
+    "maxSize": "10m",
+    "maxFiles": 5
+  }
+}
