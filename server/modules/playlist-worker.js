@@ -63,6 +63,7 @@ function startPlaylistEnrichment(playlistId, tabId, entries, cookieFile) {
 
   // Accumulator: sizes keyed by tier height, then by audio format
   const videoTotals = Object.fromEntries(TIER_HEIGHTS.map(h => [h, 0]));
+  const subtitleTotals = Object.fromEntries(TIER_HEIGHTS.map(h => [h, 0])); // subtitle overhead per tier
   const audioTotals = Object.fromEntries(AUDIO_FMTS.map(f => [f, 0]));
   const totalDuration = { value: 0 };
 
@@ -94,17 +95,15 @@ function startPlaylistEnrichment(playlistId, tabId, entries, cookieFile) {
         totalDuration.value += meta.duration || 0;
       }
 
-      // Accumulate video tier sizes
+      // Accumulate video + subtitle sizes per tier
+      const subtitleOffset = formats.subtitleInfo.subOverheadBytes || 0;
       for (const tier of TIER_HEIGHTS) {
-        const match = formats.videoFormats.find(f => f.height === tier && f.available);
-        if (match?.size) videoTotals[tier] += match.size;
-        else {
-          // Use best available ≤ this tier
-          const best = formats.videoFormats
-            .filter(f => f.available && f.size && f.height <= tier)
-            .sort((a, b) => b.height - a.height)[0];
-          if (best?.size) videoTotals[tier] += best.size;
-        }
+        const videoFormats = formats.videoFormats;
+        const best = videoFormats
+          .filter(f => f.available && f.size && f.height <= tier)
+          .sort((a, b) => b.height - a.height)[0];
+        const size = best ? best.size : 0;
+        videoTotals[tier] += size + subtitleOffset;
       }
 
       // Accumulate audio format sizes

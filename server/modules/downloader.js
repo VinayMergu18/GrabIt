@@ -27,7 +27,41 @@ const log = require('./logger').child('downloader.js');
 
 function getYtDlpBin()    { return process.platform === 'win32' ? 'yt-dlp.exe'     : 'yt-dlp'; }
 function getGalleryDlBin(){ return process.platform === 'win32' ? 'gallery-dl.exe' : 'gallery-dl'; }
-function getFfmpegBin()   { return process.platform === 'win32' ? 'ffmpeg.exe'     : 'ffmpeg'; }
+function getFfmpegBin()   {
+  if (process.platform === 'win32') {
+    // Check common ffmpeg installation locations
+    const possiblePaths = [
+      'C:\\ffmpeg-7.0.2-essentials_build\\bin\\ffmpeg.exe',
+      'C:\\ffmpeg\\bin\\ffmpeg.exe',
+      'C:\\tools\\ffmpeg\\bin\\ffmpeg.exe',
+      'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
+      'C:\\Program Files (x86)\\ffmpeg\\bin\\ffmpeg.exe',
+      process.env.USERPROFILE ? `${process.env.USERPROFILE}\\ffmpeg\\bin\\ffmpeg.exe` : '',
+      process.env.USERPROFILE ? `${process.env.USERPROFILE}\\Downloads\\ffmpeg-latest\\bin\\ffmpeg.exe` : '',
+      'ffmpeg.exe' // fallback to PATH
+    ];
+
+    const fs = require('fs');
+    const path = require('path');
+
+    for (const testPath of possiblePaths) {
+      if (!testPath) continue; // skip empty strings
+
+      try {
+        if (fs.existsSync(testPath)) {
+          return testPath;
+        }
+      } catch (e) {
+        // Continue to next path if this one fails
+        continue;
+      }
+    }
+
+    // Fallback to PATH resolution
+    return 'ffmpeg.exe';
+  }
+  return 'ffmpeg';
+}
 
 function ensureFolder(p) {
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });

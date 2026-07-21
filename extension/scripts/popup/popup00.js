@@ -520,29 +520,44 @@ function renderYTFull(probe, url) {
       const langs = (probe.subtitleInfo && probe.subtitleInfo.languages) || probe.subtitleLangs || [];
       const subtitleSelect = subsPanel.querySelector('#subtitle-lang-select');
       if (subtitleSelect) {
-        // Set initial value - try to find English, otherwise use first available or default
+        // Set initial value from settings or default to 'en'
         const defaultLang = (state.settings?.youtube?.autoSubtitleLang) || 'en';
-        let selectedLang = defaultLang;
-
-        // Try to find an English variant first
-        const englishLang = langs.find(l =>
-          l.code === 'en' ||
-          l.code === 'en-US' ||
-          l.code === 'en-GB'
-        );
-
-        if (englishLang) {
-          selectedLang = englishLang.code;
-        } else if (langs.length > 0) {
-          // Use first available language if no English
-          selectedLang = langs[0].code;
-        }
-
-        subtitleSelect.value = selectedLang;
-        state.ytSubtitleLang = selectedLang;
-
+        subtitleSelect.value = defaultLang;
+        state.ytSubtitleLang = defaultLang;
         subtitleSelect.addEventListener('change', () => {
-          state.ytSubtitleLang = subtitleSelect.value;
+          const selectedValue = subtitleSelect.value;
+
+          if (selectedValue === '__ENGLISH__') {
+            // Find the best English match
+            let englishLang = langs.find(l =>
+              l.code === 'en' ||
+              l.code === 'en-US' ||
+              l.code === 'en-GB' ||
+              (l.name && l.name.toLowerCase().includes('english'))
+            ) || null;
+
+            // If English found, use its code; otherwise default to 'en'
+            state.ytSubtitleLang = englishLang ? englishLang.code : 'en';
+            // Update the dropdown to show the actual English option as selected
+            subtitleSelect.value = state.ytSubtitleLang;
+          } else if (selectedValue === '__OTHER__') {
+            // Show all language options when "Other" is selected
+            subtitleSelect.innerHTML = '';
+
+            // Add all language options
+            const optionsHtml = langs.map(l => {
+              const label = `${escHtml(l.name || l.code)}${l.isAuto ? ' (auto)' : ' (manual)'}`;
+              const selected = l.code === ((state.settings?.youtube?.autoSubtitleLang) || 'en') ? 'selected' : '';
+              return `<option value="${escHtml(l.code)}" ${selected}>${label}</option>`;
+            }).join('');
+
+            subtitleSelect.innerHTML = optionsHtml;
+            // Focus the dropdown so user can immediately select
+            subtitleSelect.focus();
+          } else {
+            // Normal language selection
+            state.ytSubtitleLang = selectedValue;
+          }
         });
       }
     }
@@ -669,18 +684,18 @@ function renderYTSubsPanel(probe) {
   // Determine default subtitle language from settings or fallback to 'en'
   const defaultLang = (state.settings?.youtube?.autoSubtitleLang) || 'en';
 
-  // Language selector (dropdown) showing all languages directly
+  // Language selector (dropdown) with English/Other options
   const langSelect = langs.length ? `
     <div class="yt-quality-label" style="margin-top:8px">Subtitle language:</div>
     <select id="subtitle-lang-select" style="width:100%;padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:12px;">
+      <!-- English option -->
+      <option value="__ENGLISH__">English</option>
+      <!-- Other option -->
+      <option value="__OTHER__">Other</option>
+      <!-- All available languages -->
       ${langs.map(l => {
         const label = `${escHtml(l.name || l.code)}${l.isAuto ? ' (auto)' : ' (manual)'}`;
-        // Pre-select English if available, otherwise first language
-        const isSelected = (l.code === 'en' || l.code === 'en-US' || l.code === 'en-GB') &&
-                          !langs.some(l2 => l2.code === 'en' || l2.code === 'en-US' || l2.code === 'en-GB')
-                          ? l.code === 'en' || l.code === 'en-US' || l.code === 'en-GB'
-                          : l.code === defaultLang;
-        return `<option value="${escHtml(l.code)}" ${isSelected ? 'selected' : ''}>${label}</option>`;
+        return `<option value="${escHtml(l.code)}" ${l.code === defaultLang ? 'selected' : ''}>${label}</option>`;
       }).join('')}
     </select>` : '';
 
@@ -751,87 +766,56 @@ function renderYTPlaylistUI(probe) {
   const loading = `<span id="pl-loading-tag" style="font-size:10px;color:var(--text3)"> Calculating…</span>`;
 
   const qualities = [
-    { h: 2160, label: '4K'    },
-    { h: 1080, label: '1080p' },
-    { h: 720,  label: '720p'  },
-    { h: 480,  label: '480p'  },
+    { h: 2160, label: '📹 4K'    },
+    { h: 1080, label: '📹 1080p' },
+    { h: 720,  label: '📹 720p'  },
+    { h: 480,  label: '📹 480p'  },
   ];
 
-  // Video-only rows
   const videoRows = qualities.map(({ h, label }) => `
     <button class="yt-quality-row" data-pl-action="download_playlist" data-quality="${h}">
       <span class="yt-q-label">${label}</span>
-      <span class="yt-q-size" id="pl-v-${h}" title="Total size for all ${cnt} videos">${fmtSize(vt[h]) || '?'}</span>
+      <span class="yt-q-size" id="pl-v-${h}" title="Total size for all videos in this quality">${fmtSize(vt[h]) || '?'}</span>
     </button>`).join('');
 
-  // Video + subtitles rows
   const defaultLang = (state.settings?.youtube?.autoSubtitleLang) || 'en';
   const subsVideoRows = qualities.map(({ h, label }) => `
     <button class="yt-quality-row" data-pl-action="download_playlist_subs" data-quality="${h}">
       <span class="yt-q-label">${label}</span>
-      <span class="yt-q-size" id="pl-vs-${h}" title="Total size for all ${cnt} videos">${fmtSize(vt[h]) || '?'}</span>
+      <span class="yt-q-size" id="pl-vs-${h}" title="Total size for all videos in this quality">${fmtSize(vt[h]) || '?'}</span>
     </button>`).join('');
 
-  // Audio-only rows
   const audioRows = [
-    { fmt: 'mp3',  label: 'MP3'  },
-    { fmt: 'm4a',  label: 'M4A'  },
-    { fmt: 'opus', label: 'Opus' },
-    { fmt: 'flac', label: 'FLAC' },
+    { fmt: 'mp3',  label: '🎵 MP3'  },
+    { fmt: 'm4a',  label: '🎵 M4A'  },
+    { fmt: 'opus', label: '🎵 Opus' },
+    { fmt: 'flac', label: '🎵 FLAC' },
   ].map(({ fmt, label }) => `
     <button class="yt-quality-row" data-pl-action="download_playlist_audio" data-audiofmt="${fmt}">
       <span class="yt-q-label">${label}</span>
-      <span class="yt-q-size" id="pl-a-${fmt}" title="Total audio size">${fmtSize(at[fmt]) || '?'}</span>
+      <span class="yt-q-size" id="pl-a-${fmt}" title="Total size for all videos in this audio format">${fmtSize(at[fmt]) || '?'}</span>
     </button>`).join('');
 
-  const progressBar = `
+  return `
+    <div class="yt-quality-label">
+      Playlist — ${cnt} videos ${dur}
+      ${probe.enriching ? loading : ''}
+    </div>
+    <div style="font-size:11px;color:var(--text3);padding:2px 0 6px;font-weight:600">VIDEO</div>
+    <div class="yt-quality-list">${videoRows}</div>
+    <div style="font-size:11px;color:var(--text3);padding:8px 0 4px;font-weight:600">VIDEO + SUBTITLES</div>
+    <div class="settings-row" style="padding:0 0 6px">
+      <div class="settings-label" style="font-size:11px">Subtitle language</div>
+      <input id="pl-subtitle-lang" class="settings-input" value="${escHtml(defaultLang)}" style="max-width:80px" title="Language code embedded into every video (e.g. en, es, fr)">
+    </div>
+    <div class="yt-quality-list">${subsVideoRows}</div>
+    <div style="font-size:11px;color:var(--text3);padding:8px 0 4px;font-weight:600">AUDIO ONLY</div>
+    <div class="yt-quality-list">${audioRows}</div>
     <div id="pl-progress-bar" style="display:none;margin-top:8px">
       <div style="height:3px;background:var(--border);border-radius:2px">
         <div id="pl-progress-fill" style="height:3px;background:var(--accent);border-radius:2px;width:0%;transition:width .3s"></div>
       </div>
       <div id="pl-progress-label" style="font-size:10px;color:var(--text3);margin-top:3px;text-align:right"></div>
-    </div>`;
-
-  return `
-    <div class="yt-quality-label" style="margin-bottom:6px">
-      Playlist — ${cnt} videos ${dur}
-      ${probe.enriching ? loading : ''}
-    </div>
-
-    <!-- Tab bar: same style as single-video tabs -->
-    <div class="yt-tab-bar">
-      <button class="yt-tab active" data-pl-tab="video">Video</button>
-      <button class="yt-tab" data-pl-tab="subs">Video+Subs</button>
-      <button class="yt-tab" data-pl-tab="audio">Audio</button>
-    </div>
-
-    <!-- Video panel -->
-    <div class="yt-tab-panel" id="pl-panel-video">
-      <div class="yt-quality-label">Select quality — whole playlist download:</div>
-      <div class="yt-quality-list">${videoRows}</div>
-      ${progressBar}
-    </div>
-
-    <!-- Video + Subs panel -->
-    <div class="yt-tab-panel" id="pl-panel-subs" style="display:none">
-      <div class="yt-quality-label">Select quality — whole playlist with embedded subtitles:</div>
-      <div class="settings-row" style="padding:4px 0 6px;align-items:center;gap:8px">
-        <div class="settings-label" style="font-size:11px;white-space:nowrap">Subtitle language</div>
-        <select id="pl-subtitle-lang" class="settings-select" style="max-width:120px">
-          ${langs.map(l => {
-            const label = `${escHtml(l.name || l.code)}${l.isAuto ? ' (auto)' : ' (manual)'}`;
-            return `<option value="${escHtml(l.code)}" ${l.code === defaultLang ? 'selected' : ''}>${label}</option>`;
-          }).join('')}
-        </select>
-      </div>
-      <div class="yt-quality-list">${subsVideoRows}</div>
-      ${progressBar.replace(/id="pl-progress/g, 'id="pl-progress-subs')}
-    </div>
-
-    <!-- Audio panel -->
-    <div class="yt-tab-panel" id="pl-panel-audio" style="display:none">
-      <div class="yt-quality-label">Select audio format — whole playlist audio only:</div>
-      <div class="yt-quality-list">${audioRows}</div>
     </div>`;
 }
 
@@ -843,45 +827,39 @@ function updatePlaylistProgress(msg) {
   const vt = msg.videoTotals  || {};
   const at = msg.audioTotals  || {};
 
-  // Update size cells in both Video and Video+Subs panels
   for (const [h, bytes] of Object.entries(vt)) {
     if (bytes > 0) {
-      const videoEl = document.getElementById(`pl-v-${h}`);
-      if (videoEl) videoEl.textContent = fmtSize(bytes);
-      const subsEl = document.getElementById(`pl-vs-${h}`);
-      if (subsEl) subsEl.textContent = fmtSize(bytes);
+      const el = document.getElementById(`pl-v-${h}`);
+      if (el) el.textContent = fmtSize(bytes);
+      const subEl = document.getElementById(`pl-vs-${h}`);
+      if (subEl) subEl.textContent = fmtSize(bytes);
     }
   }
   for (const [fmt, bytes] of Object.entries(at)) {
-    if (bytes > 0) {
-      const el = document.getElementById(`pl-a-${fmt}`);
-      if (el) el.textContent = fmtSize(bytes);
-    }
+    const el = document.getElementById(`pl-a-${fmt}`);
+    if (el && bytes > 0) el.textContent = fmtSize(bytes);
   }
 
-  // Progress bars (one in Video panel, one cloned in Subs panel)
-  const updateBar = (barId, fillId, labelId) => {
-    const bar   = document.getElementById(barId);
-    const fill  = document.getElementById(fillId);
-    const label = document.getElementById(labelId);
-    if (!bar || !msg.total) return;
+  // Progress bar
+  const bar   = document.getElementById('pl-progress-bar');
+  const fill  = document.getElementById('pl-progress-fill');
+  const label = document.getElementById('pl-progress-label');
+  if (bar && msg.total > 0) {
     bar.style.display = msg.done ? 'none' : 'block';
     const pct = Math.round((msg.completed / msg.total) * 100);
     if (fill)  fill.style.width = pct + '%';
     if (label) label.textContent = msg.done
       ? ''
       : `Scanning ${msg.completed}/${msg.total} videos (${pct}%)…`;
-  };
-  updateBar('pl-progress-bar',      'pl-progress-fill',      'pl-progress-label');
-  updateBar('pl-progress-subs-bar', 'pl-progress-subs-fill', 'pl-progress-subs-label');
+  }
 
-  // Remove the "Calculating…" tag once done
+  // Remove loading tag once done
   if (msg.done) {
     const tag = document.getElementById('pl-loading-tag');
     if (tag) tag.remove();
   }
 
-  // Update total duration label if provided by the worker
+  // Update total duration if we have it now
   if (msg.totalDuration) {
     const probeDur = document.getElementById('pl-duration');
     if (probeDur) probeDur.textContent = fmtDuration(msg.totalDuration);
@@ -919,61 +897,17 @@ function wireYTTabs(probe, url) {
 }
 
 function wireYTPlaylist(probe, url) {
-  // Tab switching
-  document.querySelectorAll('[data-pl-tab]').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('[data-pl-tab]').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      ['video', 'subs', 'audio'].forEach(name => {
-        const panel = document.getElementById(`pl-panel-${name}`);
-        if (panel) panel.style.display = tab.dataset.plTab === name ? 'block' : 'none';
-      });
-    });
-  });
-
-  // Set up playlist subtitle language selector
-  const plSubtitleSelect = document.getElementById('pl-subtitle-lang');
-  if (plSubtitleSelect) {
-    const langs = (probe.subtitleInfo && probe.subtitleInfo.languages) || probe.subtitleLangs || [];
-    const defaultLang = (state.settings?.youtube?.autoSubtitleLang) || 'en';
-
-    // Set initial value - try to find English, otherwise use first available or default
-    let selectedLang = defaultLang;
-
-    // Try to find an English variant first
-    const englishLang = langs.find(l =>
-      l.code === 'en' ||
-      l.code === 'en-US' ||
-      l.code === 'en-GB'
-    );
-
-    if (englishLang) {
-      selectedLang = englishLang.code;
-    } else if (langs.length > 0) {
-      // Use first available language if no English
-      selectedLang = langs[0].code;
-    }
-
-    plSubtitleSelect.value = selectedLang;
-
-    plSubtitleSelect.addEventListener('change', () => {
-      // No need to store in state for playlist as it's used directly in the download options
-    });
-  }
-
-  // Download actions
   document.querySelectorAll('[data-pl-action]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const action  = btn.dataset.plAction;
-      const options = {
-        quality:  btn.dataset.quality   || '720',
-        format:   btn.dataset.audiofmt  || 'mp3',
-      };
+      const action = btn.dataset.plAction;
+      const options = { quality: btn.dataset.quality || '720', format: btn.dataset.audiofmt || 'mp3' };
       if (action === 'download_playlist_subs') {
         const langInput = document.getElementById('pl-subtitle-lang');
         options.subtitleLang = (langInput && langInput.value.trim()) || 'en';
       }
-      startDownload({ url, action, platform: 'youtube', title: probe.title, options });
+      startDownload({
+        url, action, platform: 'youtube', title: probe.title, options
+      });
     });
   });
 }
@@ -1774,7 +1708,7 @@ function renderSettings() {
         </div>
         <div class="settings-row" id="cookie-extract-row" ${app.cookieSource === 'auto' ? '' : 'style="display:none;"'}>
           <button class="btn btn-secondary" id="extract-cookies-btn" style="width:100%;margin-top:8px">
-            ${icon('retry')} <span class="btn-label">Extract Cookies Now</span>
+            ${icon('refresh')} <span class="btn-label">Extract Cookies Now</span>
           </button>
           <div id="cookie-extract-status" style="font-size:11px;margin-top:5px;color:var(--text2)">Ready to extract</div>
         </div>
@@ -1842,15 +1776,24 @@ function renderSettings() {
       }
 
       try {
-        // Use the shared helper that produces a correct Netscape-format cookie file
-        const cookiesTxt = await getAllCookiesForExport();
+        // Get ALL cookies from browser (not just current tab)
+        const cookies = await chrome.cookies.getAll({});
 
-        if (!cookiesTxt) {
-          throw new Error('No cookies found in this browser');
+        if (!cookies || cookies.length === 0) {
+          throw new Error('No cookies found');
         }
 
-        // Count data lines (skip header comments and blanks)
-        const cookieCount = cookiesTxt.split('\n').filter(l => l && !l.startsWith('#')).length;
+        // Convert to Netscape format (same as background script)
+        const cookiesTxt = cookies
+          .map(cookie => {
+            // In Netscape format, domains that start with a dot are for subdomains
+            const domain = cookie.domain.startsWith('.') ? cookie.domain : '.' + cookie.domain;
+            const secure = cookie.secure ? 'TRUE' : 'FALSE';
+            const httpOnly = cookie.httpOnly ? 'TRUE' : 'FALSE';
+            const expires = cookie.expirationDate ? Math.floor(cookie.expirationDate) : 0;
+            return [domain, 'TRUE', cookie.path, secure, expires, cookie.name, cookie.value].join('\t');
+          })
+          .join('\n');
 
         // Send to backend for injection
         const response = await fetch('http://127.0.0.1:7272/cookies/inject', {
@@ -1868,7 +1811,7 @@ function renderSettings() {
         if (result.ok) {
           // Update status
           if (statusEl) {
-            statusEl.textContent = `✓ Extracted ${cookieCount} cookies`;
+            statusEl.textContent = `✓ Extracted ${cookies.length} cookies`;
             statusEl.style.color = 'var(--green)';
 
             // Update cookie file path if server provides it

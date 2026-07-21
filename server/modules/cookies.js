@@ -4,14 +4,13 @@
  * Priority order (checked fresh on every getCookiesArgs call):
  *   1. Manual session file path from settings (always wins if file exists)
  *   2. Cached cookies.txt extracted from browser (valid if < 8h old)
- *   3. Live --cookies-from-browser arg (last known browser)
- *   4. No cookies
+ *   3. No cookies
  *
  * Key fixes:
  *  - Manual path checked BEFORE cache — setting a session file always works
  *  - cookiesFileValid() ignores manual-path files (they have their own freshness)
  *  - getCookiesArgs() re-reads settings on every call, so UI changes take effect immediately
- *  - Extraction writes to canonical COOKIES_FILE; manual path is never overwritten
+ *  - No automatic browser extraction; cookies must be provided via manual file or extension injection
  */
 
 'use strict';
@@ -58,7 +57,31 @@ function cookiesFileValid() {
   const stat = fs.statSync(COOKIES_FILE);
   if (stat.size < 200) return false;           // too small — header-only or empty
   const ageH = (Date.now() - stat.mtimeMs) / 3600000;
-  return ageH < 8;                              // valid for 8 hours
+  if (ageH >= 8) return false;                 // too old
+
+  // Additional validation: check that the file looks like a Netscape cookie file
+  try {
+    const content = fs.readFileSync(COOKIES_FILE, 'utf8');
+    const lines = content.split(/\r?\n/);
+    let foundValidLine = false;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      // Netscape cookie line: domain, flag, path, secure, expiration, name, value (tab-separated)
+      const fields = trimmed.split('\t');
+      if (fields.length === 7) {
+        // Optionally check that expiration is numeric
+        if (!isNaN(Date.parse(fields[4]))) {
+          foundValidLine = true;
+          break;
+        }
+      }
+    }
+    return foundValidLine;
+  } catch (e) {
+    console.warn('[Cookies] Failed to validate cookie file:', e.message);
+    return false;
+  }
 }
 
 // ── Browser detection ─────────────────────────────────────────────────────────
@@ -143,24 +166,34 @@ async function startupCookieExtract() {
     return;
   }
 
-  console.log('[Cookies] Auto-extracting from browser...');
-  const browsers = detectInstalledBrowsers();
-  console.log(`[Cookies] Detected: ${browsers.join(', ') || 'none'}`);
-
-  for (const browser of browsers) {
-    if (await tryExtractWithYtDlp(browser))    { _extractedBrowser = browser; _cookiesReady = true; return; }
-    if (await tryExtractWithGalleryDl(browser)) { _extractedBrowser = browser; _cookiesReady = true; return; }
-  }
-
-  console.warn('[Cookies] Auto-extract failed. Set Settings → Instagram → Session File path.');
+  // No cookie file available; do not attempt browser extraction
+  console.log('[Cookies] No cookies available (manual or cached).');
+  _cookiesReady = false;
+  _extractedBrowser = null;
 }
 
 async function refreshCookies() {
   if (fs.existsSync(COOKIES_FILE)) fs.unlinkSync(COOKIES_FILE);
-  _cookiesReady     = false;
+  _cookiesReady = false;
   _extractedBrowser = null;
-  await startupCookieExtract();
-  return _cookiesReady;
+
+  // After removal, check if manual cookie file exists
+  const manual = getManualCookiePath();
+  if (manual) {
+    console.log('[Cookies] Using manual session file after refresh:', manual);
+    _cookiesReady = true;
+    return;
+  }
+
+  // If cookie file exists (should not, because we just deleted) but check anyway
+  if (cookiesFileValid()) {
+    console.log('[Cookies] Using cached cookies.txt after refresh');
+    _cookiesReady = true;
+    return;
+  }
+
+  console.log('[Cookies] No cookies available after refresh.');
+  _cookiesReady = false;
 }
 
 function injectCookies(cookiesTxt) {
@@ -184,10 +217,11 @@ function getCookiesFile() {
  */
 function getCookiesArgs(tool = 'yt-dlp') {
   const file = getCookiesFile();
-  if (file) return ['--cookies', file];
-  if (_extractedBrowser) return ['--cookies-from-browser', _extractedBrowser];
-  const browsers = detectInstalledBrowsers();
-  if (browsers.length) return ['--cookies-from-browser', browsers[0]];
+  if (file) {
+    // Convert backslashes to forward slashes for yt-dlp on Windows
+    const normalized = process.platform === 'win32' ? file.replace(/\\/g, '/') : file;
+    return ['--cookies', normalized];
+  }
   return [];
 }
 

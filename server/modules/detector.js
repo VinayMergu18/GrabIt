@@ -56,15 +56,16 @@ function detectPlatform(url) {
 function detectYouTubeType(url) {
   try {
     const u = new URL(url);
-    const hasV    = u.searchParams.has('v');
-    const list    = u.searchParams.get('list') || '';
-    const hasList = !!list && !hasV && !u.pathname.includes('/watch');
+    const hasV = u.searchParams.has('v');
+    const list = u.searchParams.get('list') || '';
 
     if (u.pathname.includes('/live') || u.searchParams.get('live') === '1') return 'live';
     if (u.pathname.includes('/shorts/')) return 'short';
     if (u.hostname.includes('music.youtube.com')) return 'music';
-    if (hasList && list.startsWith('RD')) return 'mix_playlist';
-    if (hasList || (u.pathname === '/playlist' && list)) return 'playlist';
+    if (list && list.startsWith('RD')) return 'mix_playlist';
+    if (list) return 'playlist';
+    // No list parameter -> treat as a single video
+    return 'video';
   } catch {}
   return 'video';
 }
@@ -374,14 +375,15 @@ function buildAudioFormats(meta) {
  * We prefer manual subtitles; auto-generated are labeled accordingly.
  * Size estimate: SRT/VTT is pure text. ~300 bytes/minute for typical dialogue,
  * more for dense content. We use 400 B/min as a conservative upper bound.
+ *
+ * NOTE: Always returns hasSubtitles: true so the Video+Subs tab is available
+ * even when no subtitle tracks are present (subtitle overhead will be 0).
  */
 function buildSubtitleInfo(meta) {
   const dur      = meta.duration || 0;
   const manualLangs  = Object.keys(meta.subtitles || {});
   const autoLangs    = Object.keys(meta.automatic_captions || {});
   const allLangs     = [...new Set([...manualLangs, ...autoLangs])];
-
-  if (!allLangs.length) return { hasSubtitles: false, languages: [], subOverheadBytes: 0 };
 
   // Subtitle text is tiny. Typical SRT: ~400 B/min for dialogue.
   const subBytesPerMin = 400;
@@ -410,6 +412,7 @@ function buildSubtitleInfo(meta) {
     return a.code.localeCompare(b.code);
   });
 
+  // Always indicate that subtitles are available (even if none) so the Video+Subs tab is shown.
   return { hasSubtitles: true, languages, subOverheadBytes };
 }
 
