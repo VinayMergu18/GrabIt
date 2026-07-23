@@ -132,6 +132,12 @@ function extractProcError(e, prefix = '') {
   const meaningful = (src) =>
     (src || '').split('\n').map(l => l.trim()).filter(l => l && !noise.test(l)).slice(-5).join(' | ');
   const msg = meaningful(e.stderr) || meaningful(e.stdout) || e.message?.split('\n')[0] || String(e);
+
+  // Add timeout context if available
+  if (e.code === 'ETIMEDOUT' || e.signal === 'SIGTERM') {
+    return `${msg} (Operation timed out)`;
+  }
+
   return prefix ? `${prefix}: ${msg}` : msg;
 }
 
@@ -560,6 +566,45 @@ async function probeYouTubeSingle(url, type) {
   const FN      = 'probeYouTubeSingle';
   const videoId = videoIdFromUrl(url);
 
+  // Block known problematic URLs early to avoid wasting resources
+  const BLOCKED_URL_PATTERNS = [
+    /^https?:\/\/127\.0\.0\.1:/,
+    /^https?:\/\/localhost:/,
+    /^https?:\/\/\[::1\]/
+  ];
+
+  for (const pattern of BLOCKED_URL_PATTERNS) {
+    if (pattern.test(url)) {
+      log.warn(FN, 'Blocking known problematic URL', { url });
+      return {
+        platform: 'youtube',
+        contentType: type || 'video',
+        title: 'Blocked URL',
+        uploader: null,
+        channelId: null,
+        duration: 0,
+        thumbnail: null,
+        viewCount: 0,
+        likeCount: null,
+        uploadDate: null,
+        description: `Blocked URL for security/redundancy reasons: ${url}`,
+        isLive: false,
+        wasLive: false,
+        ageLimit: 0,
+        categories: [],
+        tags: [],
+        videoFormats: [],
+        videoSubFormats: [],
+        audioFormats: [],
+        subtitleInfo: { hasSubtitles: false, languages: [], subOverheadBytes: 0 },
+        bestAudioBytes: 0,
+        estimatedSize: null,
+        actions: [],
+        stage: 2
+      };
+    }
+  }
+
   log.info(FN, 'Starting probe', { url, type, videoId });
 
   // ── Cache hit ──────────────────────────────────────────────────────────────
@@ -646,6 +691,37 @@ async function probeYouTubeSingle(url, type) {
 async function probeYouTubePlaylist(url, type = 'playlist') {
   const FN     = 'probeYouTubePlaylist';
   const listId = listIdFromUrl(url);
+
+  // Block known problematic URLs early to avoid wasting resources
+  const BLOCKED_URL_PATTERNS = [
+    /^https?:\/\/127\.0\.0\.1:/,
+    /^https?:\/\/localhost:/,
+    /^https?:\/\/\[::1\]/
+  ];
+
+  for (const pattern of BLOCKED_URL_PATTERNS) {
+    if (pattern.test(url)) {
+      log.warn(FN, 'Blocking known problematic URL', { url });
+      return {
+        platform: 'youtube',
+        contentType: type,
+        playlistId: null,
+        title: 'Blocked URL',
+        uploader: null,
+        thumbnail: null,
+        itemCount: 0,
+        totalCount: 0,
+        duration: 0,
+        videoTotals: {},
+        audioTotals: {},
+        entries: [],
+        enriching: false,
+        actions: [],
+        stage: 2
+      };
+    }
+  }
+
   log.info(FN, 'Starting playlist probe', { url, type, listId });
 
   if (listId) {
@@ -711,6 +787,35 @@ async function probeYouTubePlaylist(url, type = 'playlist') {
 async function probeInstagram(url, currentSlide = 0) {
   const FN   = 'probeInstagram';
   const type = detectInstagramType(url);
+
+  // Block known problematic URLs early to avoid wasting resources
+  const BLOCKED_URL_PATTERNS = [
+    /^https?:\/\/127\.0\.0\.1:/,
+    /^https?:\/\/localhost:/,
+    /^https?:\/\/\[::1\]/
+  ];
+
+  for (const pattern of BLOCKED_URL_PATTERNS) {
+    if (pattern.test(url)) {
+      log.warn(FN, 'Blocking known problematic URL', { url });
+      return {
+        platform: 'instagram',
+        contentType: type,
+        mediaType: 'unknown',
+        title: 'Blocked URL',
+        uploader: null,
+        thumbnail: null,
+        duration: 0,
+        slideCount: 0,
+        slides: [],
+        currentSlideType: 'unknown',
+        actions: [],
+        source: 'blocked',
+        stage: 2
+      };
+    }
+  }
+
   log.info(FN, 'Starting probe', { url, type, currentSlide });
   if (type === 'reel' || type === 'story' || type === 'igtv') {
     return probeInstagramYtDlp(url, type);
@@ -730,6 +835,33 @@ async function probeInstagram(url, currentSlide = 0) {
 async function probeInstagramGalleryDl(url, type) {
   const FN  = 'probeInstagramGalleryDl';
   const bin = getGalleryDlBin();
+
+  // Block known problematic URLs early to avoid wasting resources
+  const BLOCKED_URL_PATTERNS = [
+    /^https?:\/\/127\.0\.0\.1:/,
+    /^https?:\/\/localhost:/,
+    /^https?:\/\/\[::1\]/
+  ];
+
+  for (const pattern of BLOCKED_URL_PATTERNS) {
+    if (pattern.test(url)) {
+      log.warn(FN, 'Blocking known problematic URL', { url });
+      return {
+        platform: 'instagram',
+        contentType: type,
+        mediaType: 'unknown',
+        title: 'Blocked URL',
+        uploader: null,
+        thumbnail: null,
+        slideCount: 0,
+        slides: [],
+        actions: [],
+        source: 'blocked',
+        stage: 2
+      };
+    }
+  }
+
   const args = ['--dump-json', '--no-download', ...getCookiesArgs('gallery-dl'), url];
 
   log.cmd(FN, bin, args);
@@ -797,6 +929,33 @@ async function probeInstagramYtDlp(url, type) {
   const FN   = 'probeInstagramYtDlp';
   const args = ['--dump-json', '--quiet', '--no-warnings', '--no-playlist', '--no-check-formats', ...getCookiesArgs('yt-dlp'), url];
 
+  // Block known problematic URLs early to avoid wasting resources
+  const BLOCKED_URL_PATTERNS = [
+    /^https?:\/\/127\.0\.0\.1:/,
+    /^https?:\/\/localhost:/,
+    /^https?:\/\/\[::1\]/
+  ];
+
+  for (const pattern of BLOCKED_URL_PATTERNS) {
+    if (pattern.test(url)) {
+      log.warn(FN, 'Blocking known problematic URL', { url });
+      return {
+        platform: 'instagram',
+        contentType: type,
+        mediaType: 'unknown',
+        title: 'Blocked URL',
+        uploader: null,
+        thumbnail: null,
+        duration: 0,
+        slideCount: 0,
+        slides: [],
+        actions: [],
+        source: 'blocked',
+        stage: 2
+      };
+    }
+  }
+
   log.info(FN, 'Starting yt-dlp Instagram probe', { url, type });
 
   let stdout;
@@ -843,6 +1002,28 @@ function classifyStreamProtocol(url, meta) {
 
 async function probeGeneric(url) {
   const FN       = 'probeGeneric';
+
+  // Block known problematic URLs early to avoid wasting resources
+  const BLOCKED_URL_PATTERNS = [
+    /^https?:\/\/127\.0\.0\.1:/,
+    /^https?:\/\/localhost:/,
+    /^https?:\/\/\[::1\]/
+  ];
+
+  for (const pattern of BLOCKED_URL_PATTERNS) {
+    if (pattern.test(url)) {
+      log.warn(FN, 'Blocking known problematic URL', { url });
+      return {
+        platform: 'generic',
+        contentType: 'unknown',
+        url,
+        error: `Blocked URL for security/redundancy reasons: ${url}`,
+        actions: [],
+        stage: 2
+      };
+    }
+  }
+
   const protocol = classifyStreamProtocol(url, null);
   log.info(FN, 'Starting generic probe', { url, protocol });
 

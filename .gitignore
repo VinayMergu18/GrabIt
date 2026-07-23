@@ -1,0 +1,7 @@
+# Log files
+grabit-errors.log.txt
+grabit.log.txt
+
+# Session and history data
+cookies.txt
+history.json

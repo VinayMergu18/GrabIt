@@ -124,6 +124,17 @@ function spawnProcess(bin, args, downloadId, item, parseLine) {
       }
       if (code !== 0 && code !== null) {
         const errTail = (stderr || stdout).trim().split('\n').slice(-8).join('\n');
+
+        // Add context for common error scenarios
+        let errorMsg = `${path.basename(bin)} exited ${code}: ${errTail}`;
+        if (code === null) {
+          errorMsg = `${path.basename(bin)} process terminated unexpectedly`;
+        } else if (code < 0) {
+          // Negative exit codes indicate termination by signal
+          const signal = -code;
+          errorMsg = `${path.basename(bin)} terminated by signal ${signal}: ${errTail}`;
+        }
+
         log.error(FN, `Process exited ${code}`, {
           downloadId,
           exitCode: code,
@@ -131,7 +142,7 @@ function spawnProcess(bin, args, downloadId, item, parseLine) {
           stdout: stdout.trim().slice(0, 500) || '(empty)',
           files
         });
-        return reject(new Error(`${path.basename(bin)} exited ${code}: ${errTail}`));
+        return reject(new Error(errorMsg));
       }
       log.download(FN, 'complete', { downloadId, exitCode: code, files, stdoutBytes: stdout.length, stderrBytes: stderr.length });
       resolve({ success: true, file: files[files.length - 1] || null, files, stdout, stderr });
@@ -404,7 +415,7 @@ function igBase(sub, options, settings) {
 async function downloadInstagramReel(url, options = {}, downloadId, item) {
   const settings = getSettings().instagram || {};
   const folder   = igBase('Reels', options, settings);
-  log.info('Instagram reel download (yt-dlp)', { downloadId, url });
+  log.info('Instagram reel download (yt-dlp) [video]', { downloadId, url });
   const args = [
     '--no-playlist',
     '--output', path.join(folder, '%(uploader)s_%(id)s.%(ext)s'),
@@ -418,7 +429,7 @@ async function downloadInstagramReelAudio(url, options = {}, downloadId, item) {
   const settings = getSettings().instagram || {};
   const folder   = igBase('Audio', options, settings);
   const format   = options.format || settings.preferredAudioFormat || 'mp3';
-  log.info('Instagram reel audio extraction (yt-dlp)', { downloadId, url, format });
+  log.info('Instagram reel audio extraction (yt-dlp) [video]', { downloadId, url, format });
   const args = [
     '--extract-audio', '--audio-format', format, '--audio-quality', '0',
     '--no-playlist',
@@ -432,7 +443,7 @@ async function downloadInstagramReelAudio(url, options = {}, downloadId, item) {
 async function downloadInstagramPhoto(url, options = {}, downloadId, item) {
   const settings = getSettings().instagram || {};
   const folder   = igBase('Photos', options, settings);
-  log.info('Instagram photo download attempt (gallery-dl)', { downloadId, url });
+  log.info('Instagram photo download attempt (gallery-dl) [image]', { downloadId, url });
   const gdArgs   = ['--directory', folder, ...getCookiesArgs('gallery-dl'), url];
   try {
     return await runGalleryDl(gdArgs, downloadId, item, folder);
@@ -448,7 +459,7 @@ async function downloadInstagramSlide(url, slideObj, options = {}, downloadId, i
   const settings = getSettings().instagram || {};
   const folder   = igBase('Slides', options, settings);
   const slideNum = slideObj.index + 1; // gallery-dl is 1-based
-  log.info('Instagram slide download (gallery-dl)', { downloadId, url, slideNum });
+  log.info('Instagram slide download (gallery-dl) [checking media type]', { downloadId, url, slideNum });
 
   const gdArgs = [
     `--range`, `${slideNum}-${slideNum}`,
@@ -459,6 +470,20 @@ async function downloadInstagramSlide(url, slideObj, options = {}, downloadId, i
   ];
 
   const result = await runGalleryDl(gdArgs, downloadId, item, folder);
+
+  // Determine media type from file extension
+  let mediaType = 'unknown';
+  if (result.files && result.files.length > 0) {
+    const ext = path.extname(result.files[0]).toLowerCase();
+    const videoExt = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv', '.m4v'];
+    if (videoExt.includes(ext)) {
+      mediaType = 'video';
+    } else {
+      mediaType = 'image';
+    }
+  }
+  log.info('Instagram slide download completed', { downloadId, url, slideNum, mediaType, fileCount: result.files?.length || 0 });
+
   return { ...result, file: result.files?.[0] || null, folder };
 }
 
@@ -468,7 +493,7 @@ async function downloadInstagramSlideAudio(url, slideObj, options = {}, download
   const format    = options.format || settings.preferredAudioFormat || 'mp3';
   const slideNum  = slideObj.index + 1;
 
-  log.info('Instagram slide audio extraction attempt', {
+  log.info('Instagram slide audio extraction attempt [checking if video]', {
     downloadId,
     url,
     slideNum,
@@ -508,6 +533,12 @@ async function downloadInstagramSlideAudio(url, slideObj, options = {}, download
     });
     throw new Error(`Cannot extract audio from ${fileExt} files - this slide appears to be an image. Use slide download instead.`);
   }
+
+  log.info('Instagram slide audio extraction started [video file]', {
+    downloadId,
+    slideNum,
+    filePath: videoFile
+  });
 
   const outFile = path.join(folder, `slide_${String(slideNum).padStart(2, '0')}.${format}`);
   const ffArgs  = ['-y', '-i', videoFile, '-vn',
@@ -550,7 +581,7 @@ async function downloadInstagramCarouselAll(url, options = {}, downloadId, item)
     'Carousels', title
   ));
 
-  log.info('Instagram carousel download all slides', {
+  log.info('Instagram carousel download all slides [mixed media]', {
     downloadId,
     url,
     carouselDir,
@@ -586,7 +617,7 @@ async function downloadInstagramCarouselFiltered(url, slideIndices, options = {}
     'Carousels', title
   ));
 
-  log.info('Instagram carousel download filtered slides', {
+  log.info('Instagram carousel download filtered slides [mixed media]', {
     downloadId,
     url,
     carouselDir,
@@ -724,7 +755,7 @@ module.exports = {
   downloadInstagramCarouselFiltered,
   downloadInstagramCarouselSlide,
   downloadInstagramSlide,
-  downloadIngramSlideAudio,
+  downloadInstagramSlideAudio,
   downloadGeneric,
   downloadStream,
   verifyFile
