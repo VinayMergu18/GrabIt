@@ -446,9 +446,9 @@ async function downloadInstagramSlide(url, slideObj, options = {}, downloadId, i
   const slideNum = slideObj.index + 1; // gallery-dl is 1-based
 
   const gdArgs = [
-    '--range', `${slideNum}-${slideNum}`,
-    '--directory', folder,
-    '--filename', `slide_${String(slideNum).padStart(2, '0')}.{extension}`,
+    `--range`, `${slideNum}-${slideNum}`,
+    `--directory`, folder,
+    `--filename`, `slide_${String(slideNum).padStart(2, '0')}.{extension}`,
     ...getCookiesArgs('gallery-dl'),
     url
   ];
@@ -469,9 +469,9 @@ async function downloadInstagramSlideAudio(url, slideObj, options = {}, download
   if (item) (item.tempFiles = item.tempFiles || []).push(tmpDir);
 
   const gdArgs = [
-    '--range', `${slideNum}-${slideNum}`,
-    '--directory', tmpDir,
-    '--filename', `slide.{extension}`,
+    `--range`, `${slideNum}-${slideNum}`,
+    `--directory`, tmpDir,
+    `--filename`, `slide.{extension}`,
     ...getCookiesArgs('gallery-dl'),
     url
   ];
@@ -654,7 +654,7 @@ module.exports = {
   downloadInstagramCarouselFiltered,
   downloadInstagramCarouselSlide,
   downloadInstagramSlide,
-  downloadInstagramSlideAudio,
+  downloadIngramSlideAudio,
   downloadGeneric,
   downloadStream,
   verifyFile

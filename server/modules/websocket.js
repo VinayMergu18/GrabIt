@@ -60,13 +60,19 @@ function safeSend(ws, data, isString = false) {
 }
 
 function broadcastProgress(id, progress) {
-  if (progressTimers.has(id)) return;
-  progressTimers.set(id, setTimeout(() => {
-    progressTimers.delete(id);
-    broadcast('download_progress', { id, progress });
-  }, PROGRESS_DEBOUNCE_MS));
-  if ((progress.percent || 0) > 0 && (progress.percent || 0) < 100) {
-    broadcast('download_progress', { id, progress });
+  // Store the latest progress
+  progressTimers.set(id, progress);
+
+  // Set up debounced broadcast if not already pending
+  if (!progressTimers.has(`${id}-timeout`)) {
+    progressTimers.set(`${id}-timeout`, setTimeout(() => {
+      const latestProgress = progressTimers.get(id);
+      progressTimers.delete(id);
+      progressTimers.delete(`${id}-timeout`);
+      if (latestProgress) {
+        broadcast('download_progress', { id, progress: latestProgress });
+      }
+    }, PROGRESS_DEBOUNCE_MS));
   }
 }
 

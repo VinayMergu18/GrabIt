@@ -1403,11 +1403,15 @@ function updateQueueBadge() {
 function updateQueueItemProgress(id, progress) {
   const bar = document.querySelector(`[data-qid="${id}"] .progress-bar`);
   const meta = document.querySelector(`[data-qid="${id}"] .qi-speed`);
+  const percent = document.querySelector(`[data-qid="${id}"] .qi-percent`);
   if (bar && progress) {
     bar.style.width = `${progress.percent || 0}%`;
   }
   if (meta && progress) {
-    meta.textContent = [progress.speed, progress.eta ? `ETA ${progress.eta}` : '', progress.totalSize].filter(Boolean).join(' · ');
+    meta.textContent = [progress.speed, progress.eta ? `ETA ${progress.eta}` : ''].filter(Boolean).join(' · ');
+  }
+  if (percent && progress) {
+    percent.textContent = `${progress.percent || 0}%`;
   }
 }
 
@@ -1440,7 +1444,7 @@ function renderQueue() {
       </div>
       <div class="qi-meta">
         <span class="qi-speed">${[item.progress?.speed, item.progress?.eta ? `ETA ${item.progress.eta}` : ''].filter(Boolean).join(' · ')}</span>
-        <span>${item.progress?.totalSize || ''}</span>
+        <span class="qi-percent">${item.progress?.percent || 0}%</span>
       </div>
       ${item.error ? `<div style="font-size:11px;color:var(--red);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${item.error}">${item.error}</div>` : ''}
       <div class="qi-actions">
