@@ -404,6 +404,7 @@ function igBase(sub, options, settings) {
 async function downloadInstagramReel(url, options = {}, downloadId, item) {
   const settings = getSettings().instagram || {};
   const folder   = igBase('Reels', options, settings);
+  log.info('Instagram reel download (yt-dlp)', { downloadId, url });
   const args = [
     '--no-playlist',
     '--output', path.join(folder, '%(uploader)s_%(id)s.%(ext)s'),
@@ -417,6 +418,7 @@ async function downloadInstagramReelAudio(url, options = {}, downloadId, item) {
   const settings = getSettings().instagram || {};
   const folder   = igBase('Audio', options, settings);
   const format   = options.format || settings.preferredAudioFormat || 'mp3';
+  log.info('Instagram reel audio extraction (yt-dlp)', { downloadId, url, format });
   const args = [
     '--extract-audio', '--audio-format', format, '--audio-quality', '0',
     '--no-playlist',
@@ -430,10 +432,12 @@ async function downloadInstagramReelAudio(url, options = {}, downloadId, item) {
 async function downloadInstagramPhoto(url, options = {}, downloadId, item) {
   const settings = getSettings().instagram || {};
   const folder   = igBase('Photos', options, settings);
+  log.info('Instagram photo download attempt (gallery-dl)', { downloadId, url });
   const gdArgs   = ['--directory', folder, ...getCookiesArgs('gallery-dl'), url];
   try {
     return await runGalleryDl(gdArgs, downloadId, item, folder);
   } catch {
+    log.info('Instagram gallery-dl failed, falling back to yt-dlp', { downloadId, url });
     const args = ['--output', path.join(folder, '%(uploader)s_%(id)s.%(ext)s'), '--no-playlist', '--no-warnings', url];
     args.push(...getCookiesArgs('yt-dlp'));
     return runYtDlp(args, downloadId, item);
@@ -444,6 +448,7 @@ async function downloadInstagramSlide(url, slideObj, options = {}, downloadId, i
   const settings = getSettings().instagram || {};
   const folder   = igBase('Slides', options, settings);
   const slideNum = slideObj.index + 1; // gallery-dl is 1-based
+  log.info('Instagram slide download (gallery-dl)', { downloadId, url, slideNum });
 
   const gdArgs = [
     `--range`, `${slideNum}-${slideNum}`,
@@ -463,6 +468,13 @@ async function downloadInstagramSlideAudio(url, slideObj, options = {}, download
   const format    = options.format || settings.preferredAudioFormat || 'mp3';
   const slideNum  = slideObj.index + 1;
 
+  log.info('Instagram slide audio extraction attempt', {
+    downloadId,
+    url,
+    slideNum,
+    format
+  });
+
   // Download the video slide to a temp dir, then extract audio
   const tmpDir = path.join(os.tmpdir(), `mg_slide_${downloadId || Date.now()}`);
   ensureFolder(tmpDir);
@@ -480,15 +492,52 @@ async function downloadInstagramSlideAudio(url, slideObj, options = {}, download
   if (item?.cancelled) throw new Error('Cancelled');
 
   const videoFile = gdResult.files?.[0];
-  if (!videoFile || !fs.existsSync(videoFile)) throw new Error(`Slide ${slideNum} not found for audio extraction`);
+  if (!videoFile || !fs.existsSync(videoFile)) {
+    throw new Error(`Slide ${slideNum} not found for audio extraction`);
+  }
+
+  // Check if the file is actually a video file before attempting audio extraction
+  const videoExtensions = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv', '.m4v'];
+  const fileExt = path.extname(videoFile).toLowerCase();
+  if (!videoExtensions.includes(fileExt)) {
+    log.warn('Instagram slide audio extraction skipped - file appears to be image', {
+      downloadId,
+      slideNum,
+      filePath: videoFile,
+      fileExt
+    });
+    throw new Error(`Cannot extract audio from ${fileExt} files - this slide appears to be an image. Use slide download instead.`);
+  }
 
   const outFile = path.join(folder, `slide_${String(slideNum).padStart(2, '0')}.${format}`);
   const ffArgs  = ['-y', '-i', videoFile, '-vn',
     '-acodec', format === 'mp3' ? 'libmp3lame' : format === 'aac' ? 'aac' : 'copy',
     '-q:a', '2', outFile
   ];
+
+  log.info('Running FFmpeg for audio extraction', {
+    downloadId,
+    inputFile: videoFile,
+    outputFile: outFile,
+    format
+  });
+
   await spawnProcess(getFfmpegBin(), ffArgs, downloadId, item, () => null);
-  try { fs.unlinkSync(videoFile); fs.rmdirSync(tmpDir); } catch {}
+  try {
+    fs.unlinkSync(videoFile);
+    fs.rmdirSync(tmpDir);
+  } catch (cleanupError) {
+    log.warn('Cleanup failed after audio extraction', {
+      downloadId,
+      tempDir: tmpDir,
+      error: cleanupError.message
+    });
+  }
+
+  log.info('Instagram slide audio extraction completed', {
+    downloadId,
+    outputFile: outFile
+  });
 
   return { success: true, file: outFile, files: [outFile] };
 }
@@ -501,6 +550,13 @@ async function downloadInstagramCarouselAll(url, options = {}, downloadId, item)
     'Carousels', title
   ));
 
+  log.info('Instagram carousel download all slides', {
+    downloadId,
+    url,
+    carouselDir,
+    title
+  });
+
   const gdArgs = [
     '--directory', carouselDir,
     '--filename', '{num:>02}.{extension}',
@@ -512,7 +568,13 @@ async function downloadInstagramCarouselAll(url, options = {}, downloadId, item)
   try {
     fs.writeFileSync(path.join(carouselDir, 'metadata.json'),
       JSON.stringify({ url, title, downloadedAt: new Date().toISOString(), files: result.files }, null, 2));
-  } catch {}
+  } catch (metadataError) {
+    log.warn('Failed to write carousel metadata', {
+      downloadId,
+      carouselDir,
+      error: metadataError.message
+    });
+  }
   return { ...result, folder: carouselDir };
 }
 
@@ -524,10 +586,18 @@ async function downloadInstagramCarouselFiltered(url, slideIndices, options = {}
     'Carousels', title
   ));
 
+  log.info('Instagram carousel download filtered slides', {
+    downloadId,
+    url,
+    carouselDir,
+    title,
+    slideIndices
+  });
+
   const gdArgs = [
-    '--range', slideIndices,
-    '--directory', carouselDir,
-    '--filename', '{num:>02}.{extension}',
+    `--range`, slideIndices,
+    `--directory`, carouselDir,
+    `--filename`, '{num:>02}.{extension}',
     ...getCookiesArgs('gallery-dl'),
     url
   ];
