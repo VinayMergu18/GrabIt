@@ -380,7 +380,7 @@ async function downloadYouTubeAudio(url, options = {}, downloadId, item) {
   const args = [
     '--extract-audio', '--audio-format', format,
     '--audio-quality', format === 'mp3' ? '192' : '0',
-    '--embed-thumbnail', '--convert-thumbnails', 'jpg', '--add-metadata',
+    '--embed-thumbnail', '--add-metadata',
     '--output', path.join(folder, '%(title)s [%(id)s].%(ext)s'),
     '--no-playlist', '--progress', '--newline', '--no-warnings', url
   ];

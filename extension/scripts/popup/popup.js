@@ -658,7 +658,7 @@ function renderYTSubsPanel(probe) {
   }
 
   if (!hasSubs) return `<div style="padding:14px 10px;color:var(--text3);font-size:12px;text-align:center">
-    No subtitles or captions are available for this video.<br>Use the Video tab instead.</div>`;
+    Subtitles not available</div>`;
 
   const langs = subInfo.languages || [];
   let formats = (probe.videoSubFormats || probe.videoFormats || []).slice();
@@ -667,7 +667,7 @@ function renderYTSubsPanel(probe) {
   formats.sort((a, b) => (b.height || 0) - (a.height || 0));
 
   // Determine default subtitle language from settings or fallback to 'en'
-  // const defaultLang = (state.settings?.youtube?.autoSubtitleLang) || 'en';
+  const defaultLang = (state.settings?.youtube?.autoSubtitleLang) || 'en';
 
   // Language selector (dropdown) showing all languages directly
   const langSelect = langs.length ? `
@@ -676,9 +676,8 @@ function renderYTSubsPanel(probe) {
       ${langs.map(l => {
         const label = `${escHtml(l.name || l.code)}${l.isAuto ? ' (auto)' : ' (manual)'}`;
         // Pre-select English if available, otherwise first language
-        const isSelected = (l.code === 'en' || l.code === 'en-US' || l.code === 'en-GB') &&
-                          !langs.some(l2 => l2.code === 'en' || l2.code === 'en-US' || l2.code === 'en-GB')
-                          ? l.code === 'en' || l.code === 'en-US' || l.code === 'en-GB'
+        const isSelected = langs.some(l2 => l2.code === 'en' || l2.code === 'en-US' || l2.code === 'en-GB')
+                          ? (l.code === 'en' || l.code === 'en-US' || l.code === 'en-GB')
                           : l.code === defaultLang;
         return `<option value="${escHtml(l.code)}" ${isSelected ? 'selected' : ''}>${label}</option>`;
       }).join('')}
@@ -816,18 +815,24 @@ function renderYTPlaylistUI(probe) {
 
     <!-- Video + Subs panel -->
     <div class="yt-tab-panel" id="pl-panel-subs" style="display:none">
-      <div class="yt-quality-label">Select quality — whole playlist with embedded subtitles:</div>
-      <div class="settings-row" style="padding:4px 0 6px;align-items:center;gap:8px">
-        <div class="settings-label" style="font-size:11px;white-space:nowrap">Subtitle language</div>
-        <select id="pl-subtitle-lang" class="settings-select" style="max-width:120px">
-          ${langs.map(l => {
-            const label = `${escHtml(l.name || l.code)}${l.isAuto ? ' (auto)' : ' (manual)'}`;
-            return `<option value="${escHtml(l.code)}" ${l.code === defaultLang ? 'selected' : ''}>${label}</option>`;
-          }).join('')}
-        </select>
-      </div>
-      <div class="yt-quality-list">${subsVideoRows}</div>
-      ${progressBar.replace(/id="pl-progress/g, 'id="pl-progress-subs')}
+      ${langs.length === 0 ? `
+        <div style="padding:14px 10px;color:var(--text3);font-size:12px;text-align:center">
+          Subtitles not available
+        </div>
+      ` : `
+        <div class="yt-quality-label">Select quality — whole playlist with embedded subtitles:</div>
+        <div class="settings-row" style="padding:4px 0 6px;align-items:center;gap:8px">
+          <div class="settings-label" style="font-size:11px;white-space:nowrap">Subtitle language</div>
+          <select id="pl-subtitle-lang" class="settings-select" style="max-width:120px">
+            ${langs.map(l => {
+              const label = `${escHtml(l.name || l.code)}${l.isAuto ? ' (auto)' : ' (manual)'}`;
+              return `<option value="${escHtml(l.code)}" ${l.code === defaultLang ? 'selected' : ''}>${label}</option>`;
+            }).join('')}
+          </select>
+        </div>
+        <div class="yt-quality-list">${subsVideoRows}</div>
+        ${progressBar.replace(/id="pl-progress/g, 'id="pl-progress-subs')}
+      `}
     </div>
 
     <!-- Audio panel -->
