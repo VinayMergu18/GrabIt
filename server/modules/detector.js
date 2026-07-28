@@ -419,7 +419,8 @@ function buildSubtitleInfo(meta) {
   });
 
   // Always indicate that subtitles are available (even if none) so the Video+Subs tab is shown.
-  return { hasSubtitles: true, languages, subOverheadBytes };
+  // return { hasSubtitles: true, languages, subOverheadBytes };
+  return { hasSubtitles: true, languages: languages, subOverheadBytes: subOverheadBytes };
 }
 
 // ── Main YouTube result builder ───────────────────────────────────────────────

@@ -667,7 +667,7 @@ function renderYTSubsPanel(probe) {
   formats.sort((a, b) => (b.height || 0) - (a.height || 0));
 
   // Determine default subtitle language from settings or fallback to 'en'
-  const defaultLang = (state.settings?.youtube?.autoSubtitleLang) || 'en';
+  // const defaultLang = (state.settings?.youtube?.autoSubtitleLang) || 'en';
 
   // Language selector (dropdown) showing all languages directly
   const langSelect = langs.length ? `
@@ -747,6 +747,8 @@ function renderYTPlaylistUI(probe) {
   const at  = probe.audioTotals  || {};
   const cnt = probe.itemCount    ?? '?';
   const dur = probe.duration     ? `· ${fmtDuration(probe.duration)}` : '';
+  const langs = (probe.subtitleInfo && probe.subtitleInfo.languages) || probe.subtitleLangs || [];
+  const defaultLang = (state.settings?.youtube?.autoSubtitleLang) || 'en';
 
   const loading = `<span id="pl-loading-tag" style="font-size:10px;color:var(--text3)"> Calculating…</span>`;
 
@@ -765,7 +767,7 @@ function renderYTPlaylistUI(probe) {
     </button>`).join('');
 
   // Video + subtitles rows
-  const defaultLang = (state.settings?.youtube?.autoSubtitleLang) || 'en';
+  // const defaultLang = (state.settings?.youtube?.autoSubtitleLang) || 'en';
   const subsVideoRows = qualities.map(({ h, label }) => `
     <button class="yt-quality-row" data-pl-action="download_playlist_subs" data-quality="${h}">
       <span class="yt-q-label">${label}</span>
