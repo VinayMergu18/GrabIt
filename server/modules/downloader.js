@@ -380,11 +380,14 @@ async function downloadYouTubeAudio(url, options = {}, downloadId, item) {
   const args = [
     '--extract-audio', '--audio-format', format,
     '--audio-quality', format === 'mp3' ? '192' : '0',
+    '--convert-thumbnails', 'jpg',
     '--embed-thumbnail', '--add-metadata',
     '--output', path.join(folder, '%(title)s [%(id)s].%(ext)s'),
     '--no-playlist', '--progress', '--newline', '--no-warnings', url
   ];
   args.push(...getCookiesArgs('yt-dlp'));
+  if (settings.sponsorBlock) args.push('--sponsorblock-remove', 'all');
+  if (settings.customArgs) args.push(...settings.customArgs.trim().split(/\s+/).filter(Boolean));
   return runYtDlp(args, downloadId, item);
 }
 
@@ -404,6 +407,7 @@ async function downloadYouTubePlaylist(url, options = {}, downloadId, item) {
     args = [
       '--extract-audio', '--audio-format', format,
       '--audio-quality', format === 'mp3' ? '192' : '0',
+      '--convert-thumbnails', 'jpg',
       '--embed-thumbnail', '--add-metadata',
       '--output', path.join(folder, '%(playlist_title)s/%(playlist_index)s - %(title)s.%(ext)s'),
       '--yes-playlist', '--match-filter', matchFilter,
@@ -452,7 +456,9 @@ async function downloadInstagramReelAudio(url, options = {}, downloadId, item) {
   const folder   = igBase('Audio', options, settings);
   const format   = options.format || settings.preferredAudioFormat || 'mp3';
   const args = [
-    '--extract-audio', '--audio-format', format, '--audio-quality', '0',
+    '--extract-audio', '--audio-format', format, '--audio-quality', format === 'mp3' ? '192' : '0',
+    '--convert-thumbnails', 'jpg',
+    '--embed-thumbnail', '--add-metadata',
     '--no-playlist',
     '--output', path.join(folder, '%(uploader)s_%(id)s.%(ext)s'),
     '--progress', '--newline', '--no-warnings', url
@@ -756,7 +762,9 @@ async function downloadGeneric(url, options = {}, downloadId, item) {
 
   const args = audioOnly ? [
     '--extract-audio', '--audio-format', options.format || settings.preferredAudioFormat || 'mp3',
-    '--audio-quality', '0',
+    '--audio-quality', (options.format || settings.preferredAudioFormat || 'mp3') === 'mp3' ? '192' : '0',
+    '--convert-thumbnails', 'jpg',
+    '--embed-thumbnail', '--add-metadata',
     '--output', path.join(folder, '%(title)s.%(ext)s'),
     '--no-playlist', '--progress', '--newline', '--no-warnings', url
   ] : [

@@ -28,7 +28,7 @@ const TYPE_MAP = {
   m3u8: 'HLS',  mpd: 'DASH',
   mp4: 'MP4',   webm: 'WebM', m4v: 'MP4',
   mov: 'MOV',   mkv: 'MKV',  avi: 'AVI',
-  flv: 'FLV',   ts:  'TS',   ogg: 'OGG',
+  flv: 'FLV',   ts:  'TS',   ogg: 'OGG', ogv: 'OGG',
 };
 
 // Extensions that are definitely NOT streams (skip silently)
@@ -46,6 +46,7 @@ const SKIP_HOST = new Set(['127.0.0.1','localhost','::1']);
  * Returns null if this URL should be ignored.
  */
 function classifyUrl(url) {
+  if (typeof url !== 'string') return null;
   let clean, hostname;
   try {
     const u = new URL(url);
@@ -55,36 +56,42 @@ function classifyUrl(url) {
 
   if (SKIP_HOST.has(hostname)) return null;
 
-  // Extension-based detection (most reliable)
-  const extM = clean.match(/\.([a-z0-9]{2,4})(?:\?|$)/);
-  const ext   = extM?.[1];
-  if (ext && SKIP_EXT.has(ext)) return null;
-  if (ext && TYPE_MAP[ext])     return TYPE_MAP[ext];
-
-  // Pattern-based (no extension in URL)
-  if (/\.m3u8/i.test(url))                      return 'HLS';
-  if (/\.mpd/i.test(url))                        return 'DASH';
+  const urlLower = url.toLowerCase();
+  if (urlLower.endsWith('.m3u8')) return 'HLS';
+  if (urlLower.endsWith('.mpd')) return 'DASH';
+  if (urlLower.endsWith('.mp4') || urlLower.endsWith('.m4v')) return 'MP4';
+  if (urlLower.endsWith('.webm')) return 'WebM';
+  if (urlLower.endsWith('.ogg') || urlLower.endsWith('.ogv')) return 'OGG';
+  if (urlLower.endsWith('.mkv')) return 'MKV';
+  if (urlLower.endsWith('.avi')) return 'AVI';
+  if (urlLower.endsWith('.mov')) return 'MOV';
+  if (urlLower.endsWith('.flv')) return 'FLV';
+  if (urlLower.endsWith('.ts')) return 'TS';
+  // Pattern-based detection for URLs without clear extension
+  if (/\.m3u8/i.test(url)) return 'HLS';
+  if (/\.mpd/i.test(url)) return 'DASH';
   if (/manifest\.m3u8|playlist\.m3u8/i.test(url)) return 'HLS';
   if (/\/hls\//i.test(url) && /\.(m3u8|ts)/i.test(url)) return 'HLS';
-  if (/\/dash\//i.test(url) && /\.mpd/i.test(url))      return 'DASH';
+  if (/\/dash\//i.test(url) && /\.mpd/i.test(url)) return 'DASH';
 
   return null;
 }
 
 /** Guess resolution from URL string (e.g. "1080p", "720", "high") */
 function guessQuality(url) {
-  const u = url.toLowerCase();
-  if (/4k|2160p|uhd/.test(u))     return '4K';
-  if (/1440p|2k|qhd/.test(u))     return '1440p';
-  if (/1080p|fhd|full.?hd/.test(u)) return '1080p';
-  if (/720p|\bhd\b/.test(u))       return '720p';
-  if (/480p|\bsd\b/.test(u))       return '480p';
-  if (/360p/.test(u))              return '360p';
-  if (/240p/.test(u))              return '240p';
-  if (/144p/.test(u))              return '144p';
-  if (/high/.test(u))              return 'High';
-  if (/medium|mid/.test(u))        return 'Medium';
-  if (/low/.test(u))               return 'Low';
+  if (typeof url !== 'string') return null;
+  const urlLower = url.toLowerCase();
+  if (/4k|2160p|uhd/.test(urlLower)) return '4K';
+  if (/1440p|2k|qhd/.test(urlLower)) return '1440p';
+  if (/1080p|fhd|full.?hd/.test(urlLower)) return '1080p';
+  if (/720p|\bhd\b/.test(urlLower)) return '720p';
+  if (/480p|\bsd\b/.test(urlLower)) return '480p';
+  if (/360p/.test(urlLower)) return '360p';
+  if (/240p/.test(urlLower)) return '240p';
+  if (/144p/.test(urlLower)) return '144p';
+  if (/high/.test(urlLower)) return 'High';
+  if (/medium|mid/.test(urlLower)) return 'Medium';
+  if (/low/.test(urlLower)) return 'Low';
   return null;
 }
 

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "GrabIt",
   "version": "4.0.0",
-  "description": "Download YouTube, Instagram, and any media — fast.",
+  "description": "Download YouTube, Instagram, and any media \u00e2\u20ac\u201d fast.",
   "permissions": [
     "activeTab",
     "storage",
@@ -21,10 +21,422 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.instagram.com/*", "https://www.youtube.com/*", "https://youtube.com/*", "https://youtu.be/*", "https://music.youtube.com/*"],
-      "js": ["scripts/content/content.js"],
+      "matches": [
+        "https://www.instagram.com/*",
+        "https://www.youtube.com/*",
+        "https://youtube.com/*",
+        "https://youtu.be/*",
+        "https://music.youtube.com/*"
+      ],
+      "js": [
+        "scripts/content/content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "scripts/content/detectors/generic.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/youtube_vdown.js"
+      ],
+      "matches": [
+        "*://*.youtube.com/*"
+      ],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/youtube_vdown_untrusted.js"
+      ],
+      "matches": [
+        "*://*.youtube.com/*"
+      ],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/facebook.js"
+      ],
+      "matches": [
+        "*://*.facebook.com/*",
+        "*://*.instagram.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/facebook_untrusted.js"
+      ],
+      "matches": [
+        "*://*.facebook.com/*",
+        "*://*.instagram.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/vimeo.js"
+      ],
+      "matches": [
+        "*://*.vimeo.com/*"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/vimeo_untrusted.js"
+      ],
+      "matches": [
+        "*://*.vimeo.com/*"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/ok.js"
+      ],
+      "matches": [
+        "*://*.ok.ru/*",
+        "*://*.m.ok.ru/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/vk.js"
+      ],
+      "matches": [
+        "*://*.vk.com/*",
+        "*://*.vk.ru/*",
+        "*://*.vkvideo.ru/*",
+        "*://live.vkvideo.ru/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/canva.js"
+      ],
+      "matches": [
+        "*://*.canva.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/iq.js"
+      ],
+      "matches": [
+        "*://*.iq.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/iq_untrusted.js"
+      ],
+      "matches": [
+        "*://*.iq.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/twitcasting.js"
+      ],
+      "matches": [
+        "*://*.twitcasting.tv/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/bilibili.js"
+      ],
+      "matches": [
+        "*://*.bilibili.tv/*",
+        "*://*.bilibili.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/bilibili_untrusted.js"
+      ],
+      "matches": [
+        "*://*.bilibili.tv/*",
+        "*://*.bilibili.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/taiav.js"
+      ],
+      "matches": [
+        "*://*.taiav.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/osmosis.js"
+      ],
+      "matches": [
+        "*://*.osmosis.org/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/kick.js"
+      ],
+      "matches": [
+        "*://*.kick.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/chaturbate.js"
+      ],
+      "matches": [
+        "*://*.chaturbate.com/*",
+        "*://*.chaturbate.eu/*",
+        "*://*.chaturbate.global/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/facebook.js"
+      ],
+      "matches": [
+        "*://*.facebook.com/*",
+        "*://*.instagram.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/facebook_untrusted.js"
+      ],
+      "matches": [
+        "*://*.facebook.com/*",
+        "*://*.instagram.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/vimeo.js"
+      ],
+      "matches": [
+        "*://*.vimeo.com/*"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/vimeo_untrusted.js"
+      ],
+      "matches": [
+        "*://*.vimeo.com/*"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/ok.js"
+      ],
+      "matches": [
+        "*://*.ok.ru/*",
+        "*://*.m.ok.ru/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/vk.js"
+      ],
+      "matches": [
+        "*://*.vk.com/*",
+        "*://*.vk.ru/*",
+        "*://*.vkvideo.ru/*",
+        "*://live.vkvideo.ru/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/canva.js"
+      ],
+      "matches": [
+        "*://*.canva.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/iq.js"
+      ],
+      "matches": [
+        "*://*.iq.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/iq_untrusted.js"
+      ],
+      "matches": [
+        "*://*.iq.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/twitcasting.js"
+      ],
+      "matches": [
+        "*://*.twitcasting.tv/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/bilibili.js"
+      ],
+      "matches": [
+        "*://*.bilibili.tv/*",
+        "*://*.bilibili.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/bilibili_untrusted.js"
+      ],
+      "matches": [
+        "*://*.bilibili.tv/*",
+        "*://*.bilibili.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/taiav.js"
+      ],
+      "matches": [
+        "*://*.taiav.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/osmosis.js"
+      ],
+      "matches": [
+        "*://*.osmosis.org/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/kick.js"
+      ],
+      "matches": [
+        "*://*.kick.com/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "scripts/content/detectors/chaturbate.js"
+      ],
+      "matches": [
+        "*://*.chaturbate.com/*",
+        "*://*.chaturbate.eu/*",
+        "*://*.chaturbate.global/*"
+      ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
     }
   ],
   "action": {
