@@ -86,13 +86,27 @@ async function main() {
   const httpServer = createServer(app);
   initWebSocket(httpServer);
 
-  httpServer.listen(PORT, '127.0.0.1', () => {
-    log.ok('main', `Server ready`, { http: `http://127.0.0.1:${PORT}`, ws: `ws://127.0.0.1:${PORT}` });
-    log.ok('main', `Logs writing to ${LOG_FILE}`);
-    console.log(`\n[GrabIt] Server ready — http://127.0.0.1:${PORT}`);
-    console.log(`[GrabIt] Live logs: tail -f "${LOG_FILE}"`);
-    console.log(`[GrabIt] Errors only: tail -f "${ERR_FILE}"\n`);
-  });
+  httpServer.listen(PORT, '127.0.0.1')
+    .on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        log.error('main', `Address already in use: ${err.address}:${err.port}`, err);
+        console.error(`\n[GrabIt] Error: Address already in use ${err.address}:${err.port}`);
+        console.error('[GrabIt] Another instance of GrabIt may already be running.');
+        console.error('[GrabIt] Please stop the existing instance or change the port in server/index.js\n');
+        process.exit(1);
+      } else {
+        log.error('main', `Server error: ${err.message}`, err);
+        console.error(`\n[GrabIt] Server error: ${err.message}\n`);
+        process.exit(1);
+      }
+    })
+    .on('listening', () => {
+      log.ok('main', `Server ready`, { http: `http://127.0.0.1:${PORT}`, ws: `ws://127.0.0.1:${PORT}` });
+      log.ok('main', `Logs writing to ${LOG_FILE}`);
+      console.log(`\n[GrabIt] Server ready — http://127.0.0.1:${PORT}`);
+      console.log(`[GrabIt] Live logs: tail -f "${LOG_FILE}"`);
+      console.log(`[GrabIt] Errors only: tail -f "${ERR_FILE}"\n`);
+    });
 
   process.on('uncaughtException', (err) => {
     log.error('uncaughtException', err.message, err);
