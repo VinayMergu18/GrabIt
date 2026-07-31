@@ -52,16 +52,16 @@ function icon(name, size = 14) {
   const icons = {
     download: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>`,
     video: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/></svg>`,
-    audio: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z"/></svg>`,
+    audio: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z"/></svg>`,
     photo: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>`,
     playlist: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h10M4 18h10"/></svg>`,
-    folder: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>`,
+    folder: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>`,
     file: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>`,
     retry: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>`,
     x: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>`,
     check: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>`,
-    subs: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z"/></svg>`,
-    slides: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>`,
+    subs: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2v8a2 2 0 01-2 2h-3l-4 4z"/></svg>`,
+    slides: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1 1v-6z"/></svg>`,
     history: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`,
     link: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101"/><path stroke-linecap="round" stroke-linejoin="round" d="M10.172 13.828a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.101 1.102"/></svg>`
   };
@@ -473,8 +473,7 @@ async function probeYT(url) {
   }
 }
 
-// ── YouTube render — Stage 1 (instant placeholder) ────────────────────────────
-
+// ── YouTube render — Stage 1 (instant placeholder) ────────────────
 function renderYTQuick(quick, url) {
   const typeLabel = {
     video:'Video', short:'Short', live:'Live', music:'Music',
@@ -497,8 +496,7 @@ function renderYTQuick(quick, url) {
     <div style="padding:14px 10px;color:var(--text3);font-size:12px;text-align:center">Fetching metadata…</div>`;
 }
 
-// ── YouTube render — Stage 2 (full probe result) ──────────────────────────────
-
+// ── YouTube render — Stage 2 (full probe result) ──────────────────
 function renderYTFull(probe, url) {
   const isPlaylist = probe.contentType === 'playlist' || probe.contentType === 'mix_playlist';
   const isLive     = probe.contentType === 'live';
@@ -580,7 +578,7 @@ function renderYTFull(probe, url) {
 }
 
 function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s).replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>').replace(/"/g,'"');
 }
 
 function fmtCount(n) {
@@ -592,7 +590,6 @@ function fmtCount(n) {
 }
 
 // ── YouTube tab bar (Video / Video+Subs / Audio) ──────────────────────────────
-
 function renderYTVideoTabs(probe) {
   const subInfo = probe.subtitleInfo || {};
   const isPlaylist = probe.contentType === 'playlist' || probe.contentType === 'mix_playlist';
@@ -614,7 +611,6 @@ function renderYTVideoTabs(probe) {
 }
 
 // ── Video panel ───────────────────────────────────────────────────────────────
-
 function dedupeByHeight(list) {
   // Collapse multiple formats with the same height (e.g. 720p mp4 + 720p webm)
   // into a single row, keeping the variant with the largest known size.
@@ -670,7 +666,6 @@ function videoRow(f, idx) {
 }
 
 // ── Video+Subs panel ──────────────────────────────────────────────────────────
-
 function renderYTSubsPanel(probe) {
   const subInfo = probe.subtitleInfo || {};
   const isPlaylist = probe.contentType === 'playlist' || probe.contentType === 'mix_playlist';
@@ -703,7 +698,7 @@ function renderYTSubsPanel(probe) {
       ${langs.map(l => {
         const label = `${escHtml(l.name || l.code)}${l.isAuto ? ' (auto)' : ' (manual)'}`;
         // Pre-select English if available, otherwise first language
-        const isSelected = langs.some(l2 => l2.code === 'en' || l2.code === 'en-US' || l2.code === 'en-GB')
+        const isSelected = langs.some(l => l.code === 'en' || l.code === 'en-US' || l.code === 'en-GB')
                           ? (l.code === 'en' || l.code === 'en-US' || l.code === 'en-GB')
                           : l.code === defaultLang;
         return `<option value="${escHtml(l.code)}" ${isSelected ? 'selected' : ''}>${label}</option>`;
@@ -732,7 +727,6 @@ function renderYTSubsPanel(probe) {
 }
 
 // ── Audio panel ───────────────────────────────────────────────────────────────
-
 function renderYTAudioPanel(probe) {
   const fmts = probe.audioFormats || _defaultAudioFmts();
 
@@ -767,7 +761,6 @@ function _defaultAudioFmts() {
 }
 
 // ── Playlist panel ────────────────────────────────────────────────────────────
-
 function renderYTPlaylistUI(probe) {
   const vt  = probe.videoTotals  || {};
   const at  = probe.audioTotals  || {};
@@ -815,7 +808,7 @@ function renderYTPlaylistUI(probe) {
   const progressBar = `
     <div id="pl-progress-bar" style="display:none;margin-top:8px">
       <div style="height:3px;background:var(--border);border-radius:2px">
-        <div id="pl-progress-fill" style="height:3px;background:var(--accent);border-radius:2px;width:0%;transition:width .3s"></div>
+        <div id="pl-progress-fill" style="height=3px;background:var(--accent);border-radius:2px;width:0%;transition:width .3s"></div>
       </div>
       <div id="pl-progress-label" style="font-size:10px;color:var(--text3);margin-top:3px;text-align:right"></div>
     </div>`;
@@ -923,7 +916,6 @@ function updatePlaylistProgress(msg) {
 }
 
 // ── Wire-up ───────────────────────────────────────────────────────────────────
-
 function wireYTTabs(probe, url) {
   document.querySelectorAll('.yt-tab:not([disabled])').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -1013,7 +1005,6 @@ function wireYTPlaylist(probe, url) {
 }
 
 // ── Web Stream Detection ──────────────────────────────────────────────────────
-
 const TYPE_COLOURS = {
   HLS:  { bg: '#fef3c7', border: '#d97706', text: '#92400e' },
   DASH: { bg: '#ede9fe', border: '#7c3aed', text: '#4c1d95' },
@@ -1128,10 +1119,28 @@ function streamRow(s, idx) {
 
   const time = s.ts ? new Date(s.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
 
-  const qualities = ['Best','4K','1440p','1080p','720p','480p','360p','240p','144p','High','Medium','Low'];
-  const optionsHTML = qualities.map(q => {
+  // Determine the list of qualities to show in the dropdown
+  let qualityList;
+  if (s.qualities && Array.isArray(s.qualities) && s.qualities.length > 0) {
+    qualityList = s.qualities;
+  } else {
+    qualityList = ['Best','4K','1440p','1080p','720p','480p','360p','240p','144p','High','Medium','Low'];
+  }
+
+  const optionsHTML = qualityList.map(q => {
     const value = q === 'Best' ? '' : q;
-    const selected = (s.quality && s.quality === q) || (value === '' && !s.quality) ? 'selected' : '';
+    // Determine selected option:
+    // 1. If we have specific qualities from detector, select the first (highest) one
+    // 2. Else if we have a guessed quality that guessed quality, use it
+    // 3. Else default to 'Best'
+    let selected = false;
+    if (s.qualities && s.qualities.length > 0) {
+      selected = (q === s.qualities[0]); // First (highest) quality from detector
+    } else if (s.quality && qualityList.includes(s.quality)) {
+      selected = (s.quality === q);
+    } else {
+      selected = (q === 'Best');
+    }
     return `<option value="${value}" ${selected}>${q}</option>`;
   }).join('');
 
@@ -1147,7 +1156,7 @@ function streamRow(s, idx) {
         ⬇ Download
       </button>
     </div>
-    <div style="font-size:10px;color:var(--text3);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%" title="${escHtml(s.url)}">${escHtml(display)}</div>
+    <div style="font-size:10px;color:var(--text3);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width=100%" title="${escHtml(s.url)}">${escHtml(display)}</div>
     ${time ? `<div style="font-size:10px;color:var(--text3)">Detected at ${time}</div>` : ''}
   </div>`;
 }
@@ -1199,7 +1208,7 @@ function renderIG(url) {
           ${icon('video')} <span class="btn-label">Download Reel</span>
         </button>
         <button class="btn btn-secondary" id="ig-dl-reel-audio">
-          ${icon('audio')} <span class="btn-label">Audio Only</span>
+          ${icon('audio')} <span class="btn-label">Audio Only</span
         </button>
       </div>
     </div>
@@ -1671,7 +1680,7 @@ function renderSettings() {
           <select class="settings-select" data-section="youtube" data-key="retryCount">
             ${[0,1,2,3,5].map(n => `<option value="${n}" ${yt.retryCount == n ? 'selected':''}>${n}</option>`).join('')}
           </select>
-        </div>
+        </div
         <div class="settings-row">
           <div class="settings-label">Remove SponsorBlock segments</div>
           ${toggleHtml('youtube', 'removeSponsorBlock', yt.removeSponsorBlock)}
@@ -1764,7 +1773,7 @@ function renderSettings() {
         <div class="settings-section-title">Behaviour</div>
         <div class="settings-row">
           <div class="settings-label">Concurrent downloads</div>
-          <select class="settings-select" data-section="generic" data-key="concurrentDownloads">
+          <select class="settings-select" data-section="generic" data-key="concurrentDownloads>
             ${[1,2,3,4].map(n => `<option value="${n}" ${gen.concurrentDownloads == n ? 'selected':''}>${n}</option>`).join('')}
           </select>
         </div>

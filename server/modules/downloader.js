@@ -378,6 +378,7 @@ async function downloadYouTubeAudio(url, options = {}, downloadId, item) {
   const format   = options.format || settings.preferredAudioFormat || 'mp3';
 
   const args = [
+    '--format', 'bestaudio',
     '--extract-audio', '--audio-format', format,
     '--audio-quality', format === 'mp3' ? '192' : '0',
     '--convert-thumbnails', 'jpg',
@@ -405,6 +406,7 @@ async function downloadYouTubePlaylist(url, options = {}, downloadId, item) {
   let args;
   if (audioOnly) {
     args = [
+      '--format', 'bestaudio',
       '--extract-audio', '--audio-format', format,
       '--audio-quality', format === 'mp3' ? '192' : '0',
       '--convert-thumbnails', 'jpg',

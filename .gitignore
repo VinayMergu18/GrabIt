@@ -14,6 +14,7 @@ quality_sorting/
 stream_integration/
 extension/scripts/popup/popup.js.backup
 extension/scripts/popup/popup.js.backup2
+server/modules/cookies.js.backup
 
 
 #Stable Dates
@@ -22,3 +23,8 @@ extension/scripts/popup/popup.js.backup2
 
 #WorkFlow Files
 VDOWN_WORKFLOW_EXPLANATION.txt
+extension\scripts\content\detectors\obfuscated_meaning.txt
+obfuscated_meaning.txt
+INTEGRATION_SUMMARY.md
+
+
