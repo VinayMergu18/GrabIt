@@ -1517,8 +1517,8 @@ function renderQueue() {
         ${isDone && item.file ? `<button class="qi-btn" data-qaction="open-file" data-file="${item.file}">Open File</button>` : ''}
         ${isDone && item.folder ? `<button class="qi-btn" data-qaction="open-folder" data-folder="${item.folder}">Open Folder</button>` : ''}
         ${isDone && item.file && !item.folder ? `<button class="qi-btn" data-qaction="open-folder" data-file="${item.file}">Open Folder</button>` : ''}
-        ${!isDone && !isFailed ? `<button class="qi-btn danger" data-qaction="cancel" data-id="${item.id}">${icon('x', 11)} Cancel</button>` : ''}
-        ${isDone || isFailed ? `<button class="qi-btn danger" data-qaction="remove" data-id="${item.id}">${icon('x', 11)}</button>` : ''}
+        ${!isDone && !isFailed && item.status !== 'cancelled' ? `<button class="qi-btn danger" data-qaction="cancel" data-id="${item.id}">${icon('x', 11)} Cancel</button>` : ''}
+        ${isDone || isFailed || item.status === 'cancelled' ? `<button class="qi-btn danger" data-qaction="remove" data-id="${item.id}">${icon('x', 11)}</button>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -2024,7 +2024,27 @@ async function init() {
     loadQueue();
   }
 
-  document.getElementById('streams-refresh')?.addEventListener('click', loadStreams);
+  const refreshBtn = document.getElementById('streams-refresh');
+  if (refreshBtn) {
+    let lastClickTime = 0;
+    const DOUBLE_CLICK_DELAY = 300;
+    refreshBtn.addEventListener('click', e => {
+      const now = Date.now();
+      const delta = now - lastClickTime;
+      lastClickTime = now;
+      if (delta < DOUBLE_CLICK_DELAY) {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+          if (tabs[0] && tabs[0].id) {
+            chrome.tabs.reload(tabs[0].id);
+          }
+        });
+        return;
+      }
+      loadStreams();
+    });
+  }
   document.getElementById('streams-clear')?.addEventListener('click', async () => {
     await new Promise(res => chrome.runtime.sendMessage({ type: 'CLEAR_STREAMS' }, res));
     loadStreams();
