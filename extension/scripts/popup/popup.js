@@ -1282,12 +1282,13 @@ function renderIG(url) {
     const postId = url.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/)?.[2] || 'Carousel';
     startDownload({ url, action: 'download_all_slides', platform: 'instagram',
       title: `Carousel_${postId}`, options: {} });
-  });
-  document.getElementById('ig-dl-slide')?.addEventListener('click', () => {
-    const slideNum = Math.max(1, parseInt(document.getElementById('ig-slide-num')?.value || 1));
-    const slideObj = { index: slideNum - 1 };
-    startDownload({ url, action: 'download_slide', platform: 'instagram',
-      title: `Slide_${slideNum}`, options: { slide: slideObj, slideIndex: slideNum - 1 } });
+    });
+    document.getElementById('ig-dl-slide')?.addEventListener('click', () => {
+      const slideNum = Math.max(1, parseInt(document.getElementById('ig-slide-num')?.value || 1));
+      const slideObj = { index: slideNum - 1 };
+      const postId = url.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/)?.[2] || 'Carousel';
+      startDownload({ url, action: 'download_slide', platform: 'instagram',
+      title: `Slide_${slideNum}_${postId}`, options: { slide: slideObj, slideIndex: slideNum - 1 } });
   });
 }
 

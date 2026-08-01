@@ -74,6 +74,61 @@ function sanitizeFilename(name) {
     .replace(/\s+/g, ' ').trim().slice(0, 180);
 }
 
+// Helper function to convert WebP to JPG using ffmpeg
+async function convertWebpToJpg(filePath, item, downloadId) {
+  if (!filePath || !filePath.toLowerCase().endsWith('.webp')) {
+    return filePath;
+  }
+
+  const jpgPath = filePath.slice(0, -5) + '.jpg'; // Replace .webp with .jpg
+
+  try {
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      log.warn('convertWebpToJpg', `Source file does not exist: ${filePath}`);
+      return filePath;
+    }
+
+    // Check if target already exists
+    if (fs.existsSync(jpgPath)) {
+      // Remove existing file to avoid rename issues
+      fs.unlinkSync(jpgPath);
+    }
+
+    const ffmpegBin = getFfmpegBin();
+    const args = ['-y', '-i', filePath, jpgPath];
+
+    log.cmd('convertWebpToJpg', ffmpegBin, args);
+    await spawnProcess(ffmpegBin, args, downloadId, item, () => null);
+
+    // Verify the conversion worked
+    if (fs.existsSync(jpgPath)) {
+      // Remove the original WebP file
+      fs.unlinkSync(filePath);
+
+      // Update tempFiles tracking if we're tracking this item
+      if (item && item.tempFiles) {
+        const webpIndex = item.tempFiles.indexOf(filePath);
+        if (webpIndex > -1) {
+          item.tempFiles.splice(webpIndex, 1);
+        }
+        // Add the new JPG file to tracking if not already there
+        if (!item.tempFiles.includes(jpgPath)) {
+          item.tempFiles.push(jpgPath);
+        }
+      }
+
+      return jpgPath;
+    } else {
+      log.warn('convertWebpToJpg', `Conversion failed - output file not found: ${jpgPath}`);
+      return filePath;
+    }
+  } catch (err) {
+    log.warn('convertWebpToJpg', `Failed to convert ${filePath} to JPG: ${err.message}`);
+    return filePath;
+  }
+}
+
 // ── Progress parsing ──────────────────────────────────────────────────────────
 
 const YT_PROGRESS_RE = /\[download\]\s+([\d.]+)%\s+of\s+~?([\d.]+)([KMGT]iB)(?:\s+at\s+([\d.]+[KMGT]?iB\/s))?(?:\s+ETA\s+([\d:]+))?/i;
@@ -471,28 +526,81 @@ async function downloadInstagramReelAudio(url, options = {}, downloadId, item) {
 
 async function downloadInstagramPhoto(url, options = {}, downloadId, item) {
   const settings = getSettings().instagram || {};
+
+  // Extract Instagram media ID (shortcode) from URL for naming
+  const idMatch = url.match(/(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)\/?/);
+  const mediaId = idMatch ? idMatch[1] : 'unknown';
+
   const folder   = igBase('Photos', options, settings);
-  /*
-    const gdArgs   = ['--directory', folder, ...getCookiesArgs('gallery-dl'), url];
-  */
-  /*
-    const gdArgs = [
-      '--directory', folder,
-      '--filename', '{uploader}_{id}.jpg',
-      ...getCookiesArgs('gallery-dl'),
-      url
-    ];
-*/
+
+  // Use simple filename template and rename after download
   const bin = getGalleryDlBin();
   const args = [
     '--directory', folder,
-    '--filename', '{id}.jpg',
+    '--filename', '{num:>02}.{extension}',
     ...getCookiesArgs('gallery-dl'),
     url
   ];
   log.cmd('downloadInstagramPhoto', bin, args);
   try {
-    return await runGalleryDl(args, downloadId, item, folder);
+    const result = await runGalleryDl(args, downloadId, item, folder);
+    // Convert any WebP images to JPG and rename files
+    if (Array.isArray(result.files) && result.files.length) {
+      const processed = await Promise.all(
+        result.files.map(async (filePath, index) => {
+          const ext = path.extname(filePath).toLowerCase();
+          const dir = path.dirname(filePath);
+
+          // Convert WebP to JPG if needed
+          let processedPath = filePath;
+          if (ext === '.webp') {
+            processedPath = await convertWebpToJpg(filePath, item, downloadId);
+            // Update extension after conversion
+            if (processedPath !== filePath) {
+              const newExt = path.extname(processedPath).toLowerCase();
+              // Update tempFiles tracking if we changed extensions
+              if (item && item.tempFiles) {
+                const oldIndex = item.tempFiles.indexOf(filePath);
+                if (oldIndex > -1) {
+                  item.tempFiles.splice(oldIndex, 1);
+                }
+                item.tempFiles.push(processedPath);
+              }
+            }
+          }
+
+          // Rename file to use mediaId
+          const newName = `${mediaId}_${String(index + 1).padStart(2, '0')}${path.extname(processedPath)}`;
+          const newPath = path.join(dir, newName);
+          try {
+            // Check if target file already exists to prevent overwriting
+            if (fs.existsSync(newPath)) {
+              fs.unlinkSync(newPath);
+            }
+            fs.renameSync(processedPath, newPath);
+
+            // Update tempFiles tracking
+            if (item && item.tempFiles) {
+              const oldIndex = item.tempFiles.indexOf(processedPath);
+              if (oldIndex > -1) {
+                item.tempFiles.splice(oldIndex, 1);
+              }
+              item.tempFiles.push(newPath);
+            }
+
+            return newPath;
+          } catch (renameErr) {
+            log.warn('downloadInstagramPhoto', `Failed to rename ${processedPath} to ${newPath}`, { error: renameErr.message });
+            // If rename fails, return the processed path (converted WebP or original)
+            return processedPath;
+          }
+        })
+      );
+
+      result.files = processed;
+      result.file = result.files[result.files.length - 1] || null;
+    }
+    return result;
   } catch (err) {
     log.error('downloadInstagramPhoto', `gallery-dl failed for photo ${url}`, {
       errorMsg: err.message,
@@ -511,7 +619,7 @@ async function downloadInstagramSlide(url, slideObj, options = {}, downloadId, i
   const slideNum = slideObj.index + 1; // gallery-dl is 1-based
 
   // Extract Instagram media ID (shortcode) from URL for naming
-  const idMatch = url.match(/instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)\/?/);
+  const idMatch = url.match(/(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)\/?/);
   const mediaId = idMatch ? idMatch[1] : 'unknown';
 
   const gdArgs = [
@@ -530,12 +638,30 @@ async function downloadInstagramSlide(url, slideObj, options = {}, downloadId, i
     const newName = `${mediaId}_${String(slideNum).padStart(2, '0')}${ext}`;
     const newPath = path.join(folder, newName);
     try {
+      // Check if target file already exists to prevent overwriting
+      if (fs.existsSync(newPath)) {
+        // Remove existing file first to prevent rename failure
+        fs.unlinkSync(newPath);
+      }
       fs.renameSync(videoFile, newPath);
       result.files = [newPath];
       result.file = newPath;
+      log.ok('downloadInstagramSlide', `Renamed to: ${path.basename(newPath)}`);
     } catch (renameErr) {
       // If rename fails, keep the original file but warn
       log.warn('downloadInstagramSlide', `Failed to rename ${videoFile} to ${newPath}`, { error: renameErr.message });
+    }
+
+    // Convert WebP to JPG if needed
+    const extLower = ext.toLowerCase();
+    if (extLower === '.webp') {
+      const jpgPath = await convertWebpToJpg(newPath, item, downloadId);
+      if (jpgPath !== newPath) {
+        // Conversion succeeded
+        result.files = [jpgPath];
+        result.file = jpgPath;
+      }
+      // If conversion failed, jpgPath === newPath, so we keep the original
     }
   }
 
@@ -549,7 +675,7 @@ async function downloadInstagramSlideAudio(url, slideObj, options = {}, download
   const slideNum  = slideObj.index + 1;
 
   // Extract Instagram media ID (shortcode) from URL for naming
-  const idMatch = url.match(/instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)\/?/);
+  const idMatch = url.match(/(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)\/?/);
   const mediaId = idMatch ? idMatch[1] : 'unknown';
 
   // Download the video slide to a temp dir, then extract audio
@@ -575,8 +701,21 @@ async function downloadInstagramSlideAudio(url, slideObj, options = {}, download
   const desiredVideoName = `${mediaId}_${String(slideNum).padStart(2, '0')}${videoExt}`;
   const desiredVideoPath = path.join(tmpDir, desiredVideoName);
   try {
+    // Check if target file already exists to prevent overwriting
+    if (fs.existsSync(desiredVideoPath)) {
+      // Remove existing file first to prevent rename failure
+      fs.unlinkSync(desiredVideoPath);
+    }
     fs.renameSync(videoFile, desiredVideoPath);
     videoFile = desiredVideoPath;
+    // Track the renamed file in tempFiles if we’re tracking the original
+    if (item && item.tempFiles) {
+      const index = item.tempFiles.indexOf(videoFile);
+      if (index > -1) {
+        item.tempFiles.splice(index, 1);
+      }
+      item.tempFiles.push(desiredVideoPath);
+    }
   } catch (renameErr) {
     // If rename fails, keep original file but warn
     log.warn('downloadInstagramSlideAudio', `Failed to rename ${videoFile} to ${desiredVideoPath}`, { error: renameErr.message });
@@ -588,7 +727,17 @@ async function downloadInstagramSlideAudio(url, slideObj, options = {}, download
     '-q:a', '2', outFile
   ];
   await spawnProcess(getFfmpegBin(), ffArgs, downloadId, item, () => null);
-  try { fs.unlinkSync(videoFile); fs.rmdirSync(tmpDir); } catch {}
+  try {
+    fs.unlinkSync(videoFile);
+    // Remove from tempFiles if tracked
+    if (item && item.tempFiles) {
+      const index = item.tempFiles.indexOf(videoFile);
+      if (index > -1) {
+        item.tempFiles.splice(index, 1);
+      }
+    }
+    fs.rmdirSync(tmpDir);
+  } catch {}
 
   // If we renamed the video file earlier, the output file already has correct name.
   // If rename failed, we may want to rename the output file to correct name as fallback.
@@ -596,6 +745,10 @@ async function downloadInstagramSlideAudio(url, slideObj, options = {}, download
     const desiredAudioName = `${mediaId}_${String(slideNum).padStart(2, '0')}.${format}`;
     const desiredAudioPath = path.join(folder, desiredAudioName);
     try {
+      // Check if target file already exists to prevent overwriting
+      if (fs.existsSync(desiredAudioPath)) {
+        fs.unlinkSync(desiredAudioPath);
+      }
       fs.renameSync(outFile, desiredAudioPath);
       return { success: true, file: desiredAudioPath, files: [desiredAudioPath] };
     } catch (renameErr2) {
@@ -614,6 +767,10 @@ async function downloadInstagramCarouselAll(url, options = {}, downloadId, item)
     options.folder || settings.downloadFolder || path.join(os.homedir(), 'Downloads', 'GrabIt', 'Instagram'),
     'Carousels'
   ));
+
+  // Extract Instagram media ID (shortcode) from URL for naming
+  const idMatch = url.match(/(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)\/?/);
+  const mediaId = idMatch ? idMatch[1] : 'unknown';
 
   /*
     const gdArgs = [
@@ -634,7 +791,7 @@ async function downloadInstagramCarouselAll(url, options = {}, downloadId, item)
   const bin = getGalleryDlBin();
   const args = [
     '--directory', carouselDir,
-    '--filename', '{id}_{num:>02}.jpg',
+    '--filename', '{num:>02}.{extension}',
     ...getCookiesArgs('gallery-dl'),
     url
   ];
@@ -652,13 +809,60 @@ async function downloadInstagramCarouselAll(url, options = {}, downloadId, item)
     });
     throw err;
   }
+  // Convert any WebP images to JPG
+  if (Array.isArray(result.files) && result.files.length) {
+    const converted = await Promise.all(
+      result.files.map(async (filePath, index) => {
+        const ext = path.extname(filePath).toLowerCase();
+        if (ext === '.webp') {
+          const jpgPath = await convertWebpToJpg(filePath, item, downloadId);
+          // If conversion succeeded, we'll rename it below; if not, keep original
+          return jpgPath;
+        }
+        return filePath;
+      })
+    );
+    result.files = converted;
+
+    // Rename files to use our mediaId and proper sequence numbers
+    const renamed = await Promise.all(
+      result.files.map(async (filePath, index) => {
+        const ext = path.extname(filePath);
+        const dir = path.dirname(filePath);
+        const newName = `${mediaId}_${String(index + 1).padStart(2, '0')}${ext}`;
+        const newPath = path.join(dir, newName);
+        try {
+          // Check if target file already exists to prevent overwriting
+          if (fs.existsSync(newPath)) {
+            fs.unlinkSync(newPath);
+          }
+          fs.renameSync(filePath, newPath);
+          // Update tempFiles tracking
+          if (item && item.tempFiles) {
+            const oldIndex = item.tempFiles.indexOf(filePath);
+            if (oldIndex > -1) {
+              item.tempFiles.splice(oldIndex, 1);
+            }
+            item.tempFiles.push(newPath);
+          }
+          return newPath;
+        } catch (renameErr) {
+          log.warn('downloadInstagramCarouselAll', `Failed to rename ${filePath} to ${newPath}`, { error: renameErr.message });
+          // If rename fails, keep original file
+          return filePath;
+        }
+      })
+    );
+    result.files = renamed;
+    result.file = result.files[result.files.length - 1] || null;
+  }
   try {
     let metadataName = 'metadata.json';
     if (result.files && result.files.length > 0) {
       const first = path.basename(result.files[0]);
       const underscoreIdx = first.indexOf('_');
       const id = underscoreIdx > 0 ? first.slice(0, underscoreIdx) : '';
-      if (id) {
+      if (id && id !== 'unknown') {
         metadataName = `${id}_metadata.json`;
       }
     } else {
@@ -680,6 +884,10 @@ async function downloadInstagramCarouselFiltered(url, slideIndices, options = {}
     'Carousels'
   ));
 
+  // Extract Instagram media ID (shortcode) from URL for naming
+  const idMatch = url.match(/(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)\/?/);
+  const mediaId = idMatch ? idMatch[1] : 'unknown';
+
   /*
   const gdArgs = [
     '--range', slideIndices,
@@ -702,7 +910,7 @@ async function downloadInstagramCarouselFiltered(url, slideIndices, options = {}
   const args = [
     '--range', slideIndices,
     '--directory', carouselDir,
-    '--filename', '{id}_{num:>02}.jpg',
+    '--filename', '{num:>02}.{extension}',
     ...getCookiesArgs('gallery-dl'),
     url
   ];
@@ -720,13 +928,66 @@ async function downloadInstagramCarouselFiltered(url, slideIndices, options = {}
     });
     throw err;
   }
+  // Convert any WebP images to JPG
+  if (Array.isArray(result.files) && result.files.length) {
+    const converted = await Promise.all(
+      result.files.map(async (filePath, index) => {
+        const ext = path.extname(filePath).toLowerCase();
+        if (ext === '.webp') {
+          const jpgPath = await convertWebpToJpg(filePath, item, downloadId);
+          // If conversion succeeded, we'll rename it below; if not, keep original
+          return jpgPath;
+        }
+        return filePath;
+      })
+    );
+    result.files = converted;
+
+    // Rename files to use our mediaId and proper sequence numbers
+    // Note: For filtered slides, we want to preserve the original numbering from slideIndices
+    const renamed = await Promise.all(
+      result.files.map(async (filePath, index) => {
+        const ext = path.extname(filePath);
+        const dir = path.dirname(filePath);
+        // For filtered slides, we need to map the index to the actual slide number
+        // slideIndices is a string like "1,3,5" or "2-4"
+        // For simplicity, we'll use sequential numbering based on the result files order
+        // A more sophisticated approach would parse slideIndices to get exact numbers
+        const slideNum = index + 1; // This assumes the files are in order
+        const newName = `${mediaId}_${String(slideNum).padStart(2, '0')}${ext}`;
+        const newPath = path.join(dir, newName);
+        try {
+          // Check if target file already exists to prevent overwriting
+          if (fs.existsSync(newPath)) {
+            fs.unlinkSync(newPath);
+          }
+          fs.renameSync(filePath, newPath);
+          // Update tempFiles tracking
+          if (item && item.tempFiles) {
+            const oldIndex = item.tempFiles.indexOf(filePath);
+            if (oldIndex > -1) {
+              item.tempFiles.splice(oldIndex, 1);
+            }
+            item.tempFiles.push(newPath);
+          }
+          return newPath;
+        } catch (renameErr) {
+          log.warn('downloadInstagramCarouselFiltered', `Failed to rename ${filePath} to ${newPath}`, { error: renameErr.message });
+          // If rename fails, keep original file
+          return filePath;
+        }
+      })
+    );
+    result.files = renamed;
+    result.file = result.files[result.files.length - 1] || null;
+  }
   try {
     let metadataName = 'metadata.json';
     if (result.files && result.files.length > 0) {
       const first = path.basename(result.files[0]);
       const underscoreIdx = first.indexOf('_');
       const id = underscoreIdx > 0 ? first.slice(0, underscoreIdx) : '';
-      if (id) {
+      if (id && id !== 'unknown') {
         metadataName = `${id}_metadata.json`;
       }
     } else {
