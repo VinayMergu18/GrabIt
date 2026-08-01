@@ -772,22 +772,6 @@ async function downloadInstagramCarouselAll(url, options = {}, downloadId, item)
   const idMatch = url.match(/(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)\/?/);
   const mediaId = idMatch ? idMatch[1] : 'unknown';
 
-  /*
-    const gdArgs = [
-      '--directory', carouselDir,
-      '--filename', '{num:>02}.{extension}',
-      ...getCookiesArgs('gallery-dl'),
-      url
-    ];
-  */
-  /*
-  const gdArgs = [
-    '--directory', carouselDir,
-    '--filename', '{num:>02}.{extension}',
-    ...getCookiesArgs('gallery-dl'),
-    url
-  ];
-*/
   const bin = getGalleryDlBin();
   const args = [
     '--directory', carouselDir,
@@ -856,6 +840,10 @@ async function downloadInstagramCarouselAll(url, options = {}, downloadId, item)
     result.files = renamed;
     result.file = result.files[result.files.length - 1] || null;
   }
+  // Metadata file creation DISABLED per user request
+  // Original code removed to prevent metadata.json generation
+  //Remove Commented Code if you want metadat.json file
+    /*
   try {
     let metadataName = 'metadata.json';
     if (result.files && result.files.length > 0) {
@@ -873,6 +861,7 @@ async function downloadInstagramCarouselAll(url, options = {}, downloadId, item)
       JSON.stringify({ url, title, downloadedAt: new Date().toISOString(), files: result.files }, null, 2)
     );
   } catch {}
+  */
   return { ...result, folder: carouselDir };
 }
 
@@ -888,24 +877,6 @@ async function downloadInstagramCarouselFiltered(url, slideIndices, options = {}
   const idMatch = url.match(/(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)\/?/);
   const mediaId = idMatch ? idMatch[1] : 'unknown';
 
-  /*
-  const gdArgs = [
-    '--range', slideIndices,
-    '--directory', carouselDir,
-    '--filename', '{num:>02}.{extension}',
-    ...getCookiesArgs('gallery-dl'),
-    url
-  ];
-*/
-  /*
-  const gdArgs = [
-    '--range', slideIndices,
-    '--directory', carouselDir,
-    '--filename', '{num:>02}.{extension}',
-    ...getCookiesArgs('gallery-dl'),
-    url
-  ];
-*/
   const bin = getGalleryDlBin();
   const args = [
     '--range', slideIndices,
@@ -981,6 +952,10 @@ async function downloadInstagramCarouselFiltered(url, slideIndices, options = {}
     result.files = renamed;
     result.file = result.files[result.files.length - 1] || null;
   }
+  // Metadata file creation DISABLED per user request
+  // Original code removed to prevent metadata.json generation
+  // Remove Commented Code if you want Metadata.json
+    /*
   try {
     let metadataName = 'metadata.json';
     if (result.files && result.files.length > 0) {
@@ -998,6 +973,7 @@ async function downloadInstagramCarouselFiltered(url, slideIndices, options = {}
       JSON.stringify({ url, title, downloadedAt: new Date().toISOString(), files: result.files }, null, 2)
     );
   } catch {}
+  */
   return { ...result, folder: carouselDir };
 }
 
