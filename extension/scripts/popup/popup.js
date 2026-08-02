@@ -94,6 +94,21 @@ function timeAgo(ts) {
   if (diff < 86400000) return Math.floor(diff/3600000) + 'h ago';
   return Math.floor(diff/86400000) + 'd ago';
 }
+
+// Playlist progress persistence
+function savePlaylistProgress(tabId, playlistId, progress) {
+  const key = `playlistProgress-${tabId}-${playlistId}`;
+  chrome.storage.local.set({ [key]: progress });
+}
+
+function loadPlaylistProgress(tabId, playlistId) {
+  const key = `playlistProgress-${tabId}-${playlistId}`;
+  return new Promise((resolve) => {
+    chrome.storage.local.get([key], (result) => {
+      resolve(result[key] || null);
+    });
+  });
+}
 async function getCookiesForUrl(url) {
   try {
     const urlObj = new URL(url);
@@ -391,7 +406,18 @@ function handleWSMessage(msg) {
     // Slide DOM tracking removed — slide selection is user-driven via the slide grid
   }
   if (msg.type === 'playlist_progress') {
-    updatePlaylistProgress(msg);
+    // Only update UI and save progress if this message is for the current tab
+    if (msg.tabId === state.currentTabId) {
+      updatePlaylistProgress(msg);
+      // Save progress to storage
+      savePlaylistProgress(state.currentTabId, msg.playlistId, {
+        completed: msg.completed,
+        total: msg.total,
+        videoTotals: msg.videoTotals,
+        audioTotals: msg.audioTotals,
+        totalDuration: msg.totalDuration
+      });
+    }
   }
   if (msg.type === 'streams_updated') {
     if (state.activeTab === 'streams') loadStreams();
@@ -466,6 +492,25 @@ async function probeYT(url) {
     state.ytProbe = deep;
     document.getElementById('yt-loading').style.display = 'none';
     renderYTFull(deep, url);
+
+    // If it's a playlist, attempt to load saved progress and update UI
+    if (deep.contentType === 'playlist' || deep.contentType === 'mix_playlist') {
+      const saved = await loadPlaylistProgress(state.currentTabId, deep.playlistId || deep.title);
+      if (saved) {
+        // Create a message-like object for updatePlaylistProgress
+        const msg = {
+          playlistId: deep.playlistId || deep.title,
+          tabId: state.currentTabId,
+          completed: saved.completed,
+          total: saved.total,
+          videoTotals: saved.videoTotals,
+          audioTotals: saved.audioTotals,
+          totalDuration: saved.totalDuration,
+          done: false // Assume still in progress unless we have a way to know
+        };
+        updatePlaylistProgress(msg);
+      }
+    }
   } catch (e) {
     document.getElementById('yt-loading').style.display = 'none';
     document.getElementById('yt-content').innerHTML = `

@@ -23,6 +23,9 @@ const lastCookieExtraction = new Map(); // Track last extraction time per tabId
 // ── Stream store ──────────────────────────────────────────────────────────────
 /** @type {Map<number, Map<string, StreamInfo>>} */
 const tabStreams = new Map();
+// ── Playlist scan progress store ────────────────────────────────────────
+/** @type {Map<number, Map<string, any>>} */
+const playlistProgressMap = new Map();
 
 const TYPE_MAP = {
   m3u8: 'HLS',  mpd: 'DASH',

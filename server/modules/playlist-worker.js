@@ -29,7 +29,7 @@ const execFileAsync = promisify(execFile);
 
 const { getCookiesArgs }              = require('./cookies');
 const { videoCache, formatCache }     = require('./cache');
-const { broadcast }                   = require('./websocket');
+const { broadcastPlaylistProgress }   = require('./websocket');
 const { buildFullFormatsFromMeta }    = require('./detector');
 
 const MAX_WORKERS  = 5;
@@ -150,7 +150,7 @@ function _extrapolate(totals, completed, probeCount, total) {
 }
 
 function _broadcast(playlistId, tabId, data) {
-  broadcast('playlist_progress', { playlistId, tabId, ...data });
+  broadcastPlaylistProgress(playlistId, tabId, data);
 }
 
 async function _probeVideo(url, cookieFile) {
