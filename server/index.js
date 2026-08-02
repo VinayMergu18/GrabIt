@@ -23,6 +23,7 @@ const settingsRoutes = require('./modules/routes/settings');
 const slideRoutes = require('./modules/routes/slide');
 const cookiesRoutes = require('./modules/routes/cookies');
 const logsRoutes    = require('./modules/routes/logs');
+const playlistStore = require('./modules/playlist-store');
 
 const PORT = 7272;
 
@@ -30,6 +31,9 @@ async function main() {
   log.info('main', 'GrabIt server starting v3.0');
   log.info('main', `Log files`, { main: LOG_FILE, errors: ERR_FILE });
 
+
+  playlistStore.clearAll();
+  log.ok('main', 'Cleared playlist cache files after startup');
   // Init persistent storage
   await initDB();
   log.ok('main', 'Database initialised');
