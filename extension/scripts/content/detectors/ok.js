@@ -8215,24 +8215,39 @@ async function va(e, t) {
   let n = await r.text(),
     i = hn(n);
   if (i.isErr()) return (console.warn(`MPD playlist error ${i.error}`), S);
-  let [a, u, s] = i.value,
-    l = {
-      type: "mpd_playlist",
-      playlist: a,
-      has_drm: s,
-      hash: `media_hash_${St(t.href)}`,
-      discovery_timestamp_ms: Date.now(),
-      duration: u,
-      is_youtube: !1,
-      filename: S,
-      sent_headers: new Headers(),
-      initiator: K(window.location.href),
-      prefered_entry: S,
-      title: x(e.title),
-      thumbnail_url: K(e.thumbnail_url),
-      master_url: t,
-      cache: "default",
-    };
+  let [a, u, s] = i.value;
+  // Extract qualities from DASH manifest
+  let qualities = [];
+  if (a && Array.isArray(a)) {
+    const heights = new Set();
+    for (const rep of a) {
+      if (rep.quality && rep.quality.size && rep.quality.size.height) {
+        heights.add(`${rep.quality.size.height}p`);
+      }
+    }
+    qualities = Array.from(heights).sort((a, b) => {
+      const na = parseInt(a);
+      const nb = parseInt(b);
+      return nb - na;
+    });
+  }
+  l = {
+    type: "mpd_playlist",
+    playlist: a,
+    has_drm: s,
+    hash: `media_hash_${St(t.href)}`,
+    discovery_timestamp_ms: Date.now(),
+    duration: u,
+    is_youtube: !1,
+    filename: S,
+    sent_headers: new Headers(),
+    initiator: K(window.location.href),
+    prefered_entry: S,
+    title: x(e.title),
+    thumbnail_url: K(e.thumbnail_url),
+    master_url: t,
+    cache: "default",
+  };
   return x(l);
 }
 async function Ta(e, t) {
@@ -8242,24 +8257,44 @@ async function Ta(e, t) {
     i = tr(n, t, S);
   if (i.isOk()) {
     let a = i.value,
-      { duration: u } = await rr(a),
-      s = {
-        is_youtube: !1,
-        master_url: t,
-        prefered_entry: S,
-        initiator: K(window.location.href),
-        hash: `media_hash_${St(t.href)}`,
-        sent_headers: new Headers(),
-        thumbnail_url: K(e.thumbnail_url),
-        filename: S,
-        title: x(e.title),
-        type: "m3u8_playlist",
-        playlist: a,
-        duration: u,
-        discovery_timestamp_ms: Date.now(),
-        has_drm: !1,
-        cache: "default",
-      };
+      { duration: u } = await rr(a);
+    // Extract qualities from HLS playlist
+    let qualities = [];
+    if (a.playlist && Array.isArray(a.playlist)) {
+      const heights = new Set();
+      for (const pl of a.playlist) {
+        if (pl.attributes && pl.attributes.RESOLUTION) {
+          const match = pl.attributes.RESOLUTION.match(/^(\d+)x(\d+)$/);
+          if (match) {
+            heights.add(`${parseInt(match[2], 10)}p`);
+          }
+        } else if (pl.attributes && pl.attributes.HEIGHT) {
+          heights.add(`${parseInt(pl.attributes.HEIGHT, 10)}p`);
+        }
+      }
+      qualities = Array.from(heights).sort((a, b) => {
+        const na = parseInt(a);
+        const nb = parseInt(b);
+        return nb - na;
+      });
+    }
+    s = {
+      is_youtube: !1,
+      master_url: t,
+      prefered_entry: S,
+      initiator: K(window.location.href),
+      hash: `media_hash_${St(t.href)}`,
+      sent_headers: new Headers(),
+      thumbnail_url: K(e.thumbnail_url),
+      filename: S,
+      title: x(e.title),
+      type: "m3u8_playlist",
+      playlist: a,
+      duration: u,
+      discovery_timestamp_ms: Date.now(),
+      has_drm: !1,
+      cache: "default",
+    };
     return x(s);
   }
   return S;
@@ -8332,12 +8367,55 @@ let t = S;
         }
         if (t.isSome()) {
           ur({ name: "on_media", data: { media: Z(t.value) } });
+          // Extract qualities from the manifest
+          let qualities = [];
+          const manifest = t.value;
+          if (e.value.m3u8_url.isSome()) {
+            // HLS
+            if (manifest.playlists && Array.isArray(manifest.playlists)) {
+              const heights = new Set();
+              for (const playlist of manifest.playlists) {
+                const attrs = playlist.attributes;
+                let height;
+                if (attrs.RESOLUTION) {
+                  const match = attrs.RESOLUTION.match(/^(\\d+)x(\\d+)$/);
+                  if (match) {
+                    height = parseInt(match[2], 10);
+                  }
+                }
+                if (height) {
+                  heights.add(`${height}p`);
+                }
+              }
+              qualities = Array.from(heights).sort((a, b) => {
+                const na = parseInt(a);
+                const nb = parseInt(b);
+                return nb - na;
+              });
+            }
+          } else if (e.value.dash_url.isSome()) {
+            // DASH
+            if (manifest.playlist && Array.isArray(manifest.playlist)) {
+              const heights = new Set();
+              for (const pl of manifest.playlist) {
+                if (pl.quality && pl.quality.size && pl.quality.size.height) {
+                  heights.add(`${pl.quality.size.height}p`);
+                }
+              }
+              qualities = Array.from(heights).sort((a, b) => {
+                const na = parseInt(a);
+                const nb = parseInt(b);
+                return nb - na;
+              });
+            }
+          }
           // Send STREAM_DETECTED message for GrabIt's stream tab
           try {
             chrome.runtime.sendMessage({
               type: 'STREAM_DETECTED',
               url: url,
               pageTitle: document.title || '',
+              qualities: qualities
             });
           } catch (e) {
             console.error('Failed to send STREAM_DETECTED message:', e);

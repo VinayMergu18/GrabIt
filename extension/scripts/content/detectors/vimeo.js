@@ -3082,24 +3082,49 @@ async function Ce(i) {
         A = we(h, g, b);
       if (A.isOk()) {
         let E = A.value,
-          { duration: S } = await Ie(E),
-          v = {
-            master_url: g,
-            is_youtube: !1,
-            prefered_entry: b,
-            initiator: U(window.location.href),
-            hash: `media_hash_${ee(e.unwrapOr(location.href))}`,
-            sent_headers: new Headers(),
-            thumbnail_url: r,
-            filename: b,
-            title: e,
-            type: "m3u8_playlist",
-            playlist: E,
-            duration: S,
-            discovery_timestamp_ms: Date.now(),
-            has_drm: !1,
-            cache: "default",
-          };
+          { duration: S } = await Ie(E);
+        // Extract qualities (resolutions) from HLS playlists
+        let qualities = [];
+        if (E.playlists && Array.isArray(E.playlists)) {
+          const heights = new Set();
+          for (const playlist of E.playlists) {
+            const attrs = playlist.attributes;
+            let height;
+            if (attrs.RESOLUTION) {
+              const match = attrs.RESOLUTION.match(/^(\d+)x(\d+)$/);
+              if (match) {
+                height = parseInt(match[2], 10);
+              }
+            } else if (attrs.HEIGHT) {
+              height = parseInt(attrs.HEIGHT, 10);
+            }
+            if (height) {
+              heights.add(`${height}p`);
+            }
+          }
+          qualities = Array.from(heights).sort((a, b) => {
+            const na = parseInt(a);
+            const nb = parseInt(b);
+            return nb - na;
+          });
+        }
+        const v = {
+          master_url: g,
+          is_youtube: !1,
+          prefered_entry: b,
+          initiator: U(window.location.href),
+          hash: `media_hash_${ee(e.unwrapOr(location.href))}`,
+          sent_headers: new Headers(),
+          thumbnail_url: r,
+          filename: b,
+          title: e,
+          type: "m3u8_playlist",
+          playlist: E,
+          duration: S,
+          discovery_timestamp_ms: Date.now(),
+          has_drm: !1,
+          cache: "default",
+        };
         Pe({ name: "on_media", data: { media: F(v) } });
         // Send STREAM_DETECTED message for GrabIt's stream tab
         try {
@@ -3107,6 +3132,7 @@ async function Ce(i) {
             type: 'STREAM_DETECTED',
             url: g,
             pageTitle: document.title || '',
+            qualities: qualities
           });
         } catch (e) {
           console.error('Failed to send STREAM_DETECTED message:', e);

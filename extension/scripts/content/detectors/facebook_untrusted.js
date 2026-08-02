@@ -1,3 +1,7 @@
+// facebook_untrusted.js - Lightweight wrapper for communication with isolated world
+// This runs in the MAIN world and communicates with the ISOLATED world detector
+
+// Set up communication channel similar to youtube_untrusted.js
 var h = new BroadcastChannel("worker_service");
 var r = {
   FromInjectedToService: 0,
@@ -42,14 +46,6 @@ function l(o) {
     }
   );
 }
-function c() {
-  let o = window.ytcfg;
-  m({
-    name: "youtube_on_visitor_data",
-    data: { visitor_data: o?.data_?.VISITOR_DATA },
-  });
-}
-l((o) => {
-  o.name == "youtube_request_visitor_data" && c();
-});
-c();
+// Note: Unlike youtube_untrusted.js, facebook doesn't seem to have
+// specific initialization code like youtube_on_visitor_data
+// This is just a basic communication setup

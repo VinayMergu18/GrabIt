@@ -6704,15 +6704,35 @@ async function Qu(e) {
         cache: "default",
       };
     Pr({ name: "on_media", data: { media: Q(a) } });
+      // Extract qualities from the dash manifest
+      let qualities = [];
+      if (o.playlist && Array.isArray(o.playlist)) {
+        const heights = new Set();
+        for (const pl of o.playlist) {
+          if (pl.quality && pl.quality.size && pl.quality.size.height) {
+            heights.add(`${pl.quality.size.height}p`);
+          }
+        }
+        qualities = Array.from(heights).sort((a, b) => {
+          const na = parseInt(a);
+          const nb = parseInt(b);
+          return nb - na;
+        });
+      }
       // Send STREAM_DETECTED message for GrabIt's stream tab
       try {
         chrome.runtime.sendMessage({
           type: 'STREAM_DETECTED',
           url: u,
           pageTitle: document.title || '',
+          qualities: qualities
         });
       } catch (e) {
-        console.error('Failed to send STREAM_DETECTED message:', e);
+        // Ignore errors when extension context is invalidated (e.g., during extension reload)
+        if (!chrome.runtime.lastError ||
+            chrome.runtime.lastError.message !== "Extension context invalidated.") {
+          console.error('Failed to send STREAM_DETECTED message:', e);
+        }
       }
   }
 }

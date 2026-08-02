@@ -1607,11 +1607,35 @@ function Ue(e) {
     } else if (typeof media === 'string') {
       url = media;
     }
+    // Extract qualities from media playlist if available
+    let qualities = [];
+    if (media && typeof media === 'object' && Array.isArray(media.playlist)) {
+      const heights = new Set();
+      for (const p of media.playlist) {
+        let height;
+        if (p.height) {
+          height = p.height;
+        } else if (p.width) {
+          // optional: approximate height from width assuming 16:9
+          // height = Math.round(p.width * 9 / 16);
+          // For simplicity, we skip width-only entries.
+        }
+        if (height) {
+          heights.add(`${height}p`);
+        }
+      }
+      qualities = Array.from(heights).sort((a, b) => {
+        const na = parseInt(a);
+        const nb = parseInt(b);
+        return nb - na;
+      });
+    }
     if (url) {
       chrome.runtime.sendMessage({
         type: 'STREAM_DETECTED',
         url: url,
         pageTitle: document.title || '',
+        qualities: qualities
       });
     }
   } catch (err) {

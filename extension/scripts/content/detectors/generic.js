@@ -11,13 +11,21 @@
     function sendStreamDetected(url, pageTitle) {
         if (!url || seenUrls.has(url)) return;
         seenUrls.add(url);
-        chrome.runtime.sendMessage({
-            type: 'STREAM_DETECTED',
-            url: url,
-            pageTitle: pageTitle || document.title,
-            quality: null, // will be guessed by background
-            type: null     // will be classified by background
-        });
+        try {
+            chrome.runtime.sendMessage({
+                type: 'STREAM_DETECTED',
+                url: url,
+                pageTitle: pageTitle || document.title,
+                quality: null, // will be guessed by background
+                type: null     // will be classified by background
+            });
+        } catch (e) {
+            // Ignore errors when extension context is invalidated (e.g., during extension reload)
+            if (!chrome.runtime.lastError ||
+                chrome.runtime.lastError.message !== "Extension context invalidated.") {
+                console.error('Failed to send STREAM_DETECTED message:', e);
+            }
+        }
     }
 
     function checkAndSend(src) {

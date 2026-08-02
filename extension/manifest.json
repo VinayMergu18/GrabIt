@@ -47,28 +47,6 @@
     {
       "all_frames": true,
       "js": [
-        "scripts/content/detectors/youtube_vdown.js"
-      ],
-      "matches": [
-        "*://*.youtube.com/*"
-      ],
-      "run_at": "document_idle",
-      "world": "ISOLATED"
-    },
-    {
-      "all_frames": true,
-      "js": [
-        "scripts/content/detectors/youtube_vdown_untrusted.js"
-      ],
-      "matches": [
-        "*://*.youtube.com/*"
-      ],
-      "run_at": "document_idle",
-      "world": "MAIN"
-    },
-    {
-      "all_frames": true,
-      "js": [
         "scripts/content/detectors/facebook.js"
       ],
       "matches": [
