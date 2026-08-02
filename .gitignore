@@ -15,7 +15,7 @@ stream_integration/
 extension/scripts/popup/popup.js.backup
 extension/scripts/popup/popup.js.backup2
 server/modules/cookies.js.backup
-extension/server/cache/*
+server/cache/*
 
 
 
