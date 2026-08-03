@@ -74,6 +74,19 @@ function sanitizeFilename(name) {
     .replace(/\s+/g, ' ').trim().slice(0, 180);
 }
 
+function sanitizePlaylistName(name) {
+  return sanitizeFilename((name || 'Playlist').replace(/[\/\\]+/g, ' ')).slice(0, 120);
+}
+
+function ytRootBase(options, settings) {
+  // Base folder for all YouTube downloads. Use settings.downloadFolder if present,
+  // otherwise fall back to user's Downloads/GrabIt. Then create a 'YT' subfolder for clarity.
+  const base = options?.folder || settings?.downloadFolder || path.join(os.homedir(), 'Downloads', 'GrabIt');
+  const ytBase = path.join(base, 'YT');
+  ensureFolder(ytBase);
+  return ytBase;
+}
+
 // Helper function to convert WebP to JPG using ffmpeg
 async function convertWebpToJpg(filePath, item, downloadId) {
   if (!filePath || !filePath.toLowerCase().endsWith('.webp')) {
@@ -183,13 +196,21 @@ function spawnProcess(bin, args, downloadId, item, parseLine) {
             // Broadcast immediate progress update including playlist counts so the popup can update
             // the per-item playlist badge without waiting for a full queue refresh.
             const ws = require('./websocket');
-            ws.broadcast('download_progress', {
-              id: downloadId,
-              progress: item.progress,
-              playlistDownloaded: item.options.playlistDownloaded,
-              playlistTotal: item.options.playlistTotal,
-              playlistName: item.options.playlistName || item.title
-            });
+            // Immediately notify clients that a new file has been detected and playlist counters changed.
+            // Use websocket.broadcastProgress with immediate=true so the UI can reset per-file bars and update counters.
+            try {
+              const meta = {
+                playlistDownloaded: item.options.playlistDownloaded,
+                playlistTotal: item.options.playlistTotal,
+                playlistName: item.options.playlistName || item.title
+              };
+              // When a new Destination line is seen, reset progress.percent to 0 in-memory and broadcast immediately.
+              if (!item.progress) item.progress = { percent: 0 };
+              else item.progress.percent = 0;
+              broadcastProgress(downloadId, item.progress, meta, true);
+            } catch (e) {
+              log.warn('spawnProcess', 'Failed to update playlist counters', { error: e.message });
+            }
           }
         } catch (e) {
           log.warn('spawnProcess', 'Failed to update playlist counters', { error: e.message });
@@ -373,7 +394,8 @@ function runGalleryDl(args, downloadId, item, outputDir = null) {
 
 async function downloadYouTubeVideo(url, options = {}, downloadId, item) {
   const settings = getSettings().youtube || {};
-  const folder   = ensureFolder(options.folder || settings.downloadFolder || path.join(os.homedir(), 'Downloads', 'GrabIt', 'YouTube'));
+  const ytBase = ytRootBase(options, settings);
+  const folder = ensureFolder(path.join(ytBase, 'Videos'));
   const quality  = options.quality || settings.defaultQuality || 'recommended';
 
   let formatStr;
@@ -415,7 +437,8 @@ async function downloadYouTubeVideo(url, options = {}, downloadId, item) {
 
 async function downloadYouTubeVideoWithSubs(url, options = {}, downloadId, item) {
   const settings = getSettings().youtube || {};
-  const folder   = ensureFolder(options.folder || settings.downloadFolder || path.join(os.homedir(), 'Downloads', 'GrabIt', 'YouTube'));
+  const ytBase = ytRootBase(options, settings);
+  const titleFolder = ensureFolder(path.join(ytBase, 'Videos'));
   const quality  = options.quality || 'recommended';
   const subsOnly = options.subsOnly || false;
   const subLang  = options.subLang  || settings.autoSubtitleLang || 'en,en-US,en-GB';
@@ -453,7 +476,8 @@ async function downloadYouTubeVideoWithSubs(url, options = {}, downloadId, item)
 
 async function downloadYouTubeAudio(url, options = {}, downloadId, item) {
   const settings = getSettings().youtube || {};
-  const folder   = ensureFolder(options.folder || settings.downloadFolder || path.join(os.homedir(), 'Downloads', 'GrabIt', 'YouTube'));
+  const ytBase = ytRootBase(options, settings);
+  const folder   = ensureFolder(path.join(ytBase, 'Audio'));
   const format   = options.format || settings.preferredAudioFormat || 'mp3';
 
   const args = [
@@ -473,11 +497,15 @@ async function downloadYouTubeAudio(url, options = {}, downloadId, item) {
 
 async function downloadYouTubePlaylist(url, options = {}, downloadId, item) {
   const settings  = getSettings().youtube || {};
-  const folder    = ensureFolder(options.folder || settings.downloadFolder || path.join(os.homedir(), 'Downloads', 'GrabIt', 'YouTube'));
+  const ytBase = ytRootBase(options, settings);
   const audioOnly = options.audioOnly || false;
   const format    = options.format    || settings.preferredAudioFormat || 'mp3';
   const quality   = options.quality   || 'recommended';
   const subtitles = options.subtitles || false;
+
+  const playlistName = sanitizePlaylistName(options.playlistName || item?.title || 'Playlist');
+  const playlistFolder = audioOnly ? path.join(ytBase, 'Audio', playlistName) : path.join(ytBase, 'Playlists', playlistName);
+  const folder = ensureFolder(playlistFolder);
 
   const matchFilter = 'availability != "needs_auth" & availability != "unavailable"';
   const h = quality === 'recommended' ? 720 : parseInt(quality) || 720;
@@ -490,7 +518,7 @@ async function downloadYouTubePlaylist(url, options = {}, downloadId, item) {
       '--audio-quality', format === 'mp3' ? '192' : '0',
       '--convert-thumbnails', 'jpg',
       '--embed-thumbnail', '--add-metadata',
-      '--output', path.join(folder, '%(playlist_title)s/%(playlist_index)s - %(title)s.%(ext)s'),
+      '--output', path.join(folder, '%(playlist_index)s - %(title)s.%(ext)s'),
       '--yes-playlist', '--match-filter', matchFilter,
       '--progress', '--newline', '--no-warnings', '--ignore-errors', url
     ];
@@ -501,7 +529,7 @@ async function downloadYouTubePlaylist(url, options = {}, downloadId, item) {
       '--merge-output-format', subtitles ? 'mkv' : 'mp4',
       '--ffmpeg-location', getFfmpegBin(),
       '--add-metadata', '--write-thumbnail',
-      '--output', path.join(folder, '%(playlist_title)s/%(playlist_index)s - %(title)s [%(id)s].%(ext)s'),
+      '--output', path.join(folder, '%(playlist_index)s - %(title)s [%(id)s].%(ext)s'),
       '--yes-playlist', '--match-filter', matchFilter,
       '--progress', '--newline', '--no-warnings', '--ignore-errors', url
     ];

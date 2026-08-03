@@ -60,18 +60,31 @@ function safeSend(ws, data, isString = false) {
   try { ws.send(isString ? data : JSON.stringify(data)); } catch {}
 }
 
-function broadcastProgress(id, progress) {
-  // Store the latest progress
-  progressTimers.set(id, progress);
+function broadcastProgress(id, progress, meta = {}, immediate = false) {
+  // Store the latest progress and optional meta (e.g., playlist counters)
+  progressTimers.set(id, { progress, meta });
+
+  // If immediate is requested, flush any pending debounce and broadcast right away
+  if (immediate) {
+    if (progressTimers.has(`${id}-timeout`)) {
+      clearTimeout(progressTimers.get(`${id}-timeout`));
+      progressTimers.delete(`${id}-timeout`);
+    }
+    const latest = progressTimers.get(id);
+    progressTimers.delete(id);
+    if (latest && latest.progress) broadcast('download_progress', { id, progress: latest.progress, ...latest.meta });
+    return;
+  }
 
   // Set up debounced broadcast if not already pending
   if (!progressTimers.has(`${id}-timeout`)) {
     progressTimers.set(`${id}-timeout`, setTimeout(() => {
-      const latestProgress = progressTimers.get(id);
+      const latest = progressTimers.get(id);
       progressTimers.delete(id);
       progressTimers.delete(`${id}-timeout`);
-      if (latestProgress) {
-        broadcast('download_progress', { id, progress: latestProgress });
+      if (latest && latest.progress) {
+        // Merge progress and meta into the broadcast payload
+        broadcast('download_progress', { id, progress: latest.progress, ...latest.meta });
       }
     }, PROGRESS_DEBOUNCE_MS));
   }
