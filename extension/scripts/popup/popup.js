@@ -1313,12 +1313,12 @@ function renderIG(url) {
   // Reel downloads
   document.getElementById('ig-dl-reel')?.addEventListener('click', () => {
     startDownload({ url, action: 'download_reel', platform: 'instagram',
-      title: 'Instagram Reel', options: {} });
+      title: 'IG Reel', options: {} });
   });
   document.getElementById('ig-dl-reel-audio')?.addEventListener('click', () => {
     const fmt = document.getElementById('ig-reel-audio-fmt')?.value || 'mp3';
     startDownload({ url, action: 'download_reel_audio', platform: 'instagram',
-      title: 'Instagram Reel Audio', options: { format: fmt } });
+      title: 'IG Reel Audio', options: { format: fmt } });
   });
 
   // Photo / carousel downloads

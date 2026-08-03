@@ -216,6 +216,19 @@ function spawnProcess(bin, args, downloadId, item, parseLine) {
           log.warn('spawnProcess', 'Failed to update playlist counters', { error: e.message });
         }
       }
+      const alreadyMatch = line.match(/\[download\]\s+(.+?)\s+has already been downloaded/i);
+
+if (alreadyMatch) {
+    const f = alreadyMatch[1].trim();
+
+    if (!files.includes(f)) {
+        files.push(f);
+    }
+
+    if (item && !item.tempFiles.includes(f)) {
+        item.tempFiles.push(f);
+    }
+}
       const mergeMatch = line.match(/Merging formats into "(.+)"/);
       if (mergeMatch) files.push(mergeMatch[1].trim());
       const audioMatch = line.match(/\[ExtractAudio\].*Destination:\s*(.+)$/);

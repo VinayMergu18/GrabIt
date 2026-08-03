@@ -61,6 +61,8 @@ router.post('/open-file', (req, res) => {
   res.json({ ok: true });
 });
 
+// router.post('/open-folder', (req, res) => {
+//   const { folderPath, filePath } = req.body;
 router.post('/open-folder', (req, res) => {
   const { folderPath, filePath } = req.body;
   const target = folderPath || (filePath ? path.dirname(filePath) : null);
