@@ -11,7 +11,8 @@
     "autoRetry": true,
     "sponsorBlock": false,
     "customArgs": "",
-    "cookieSource": "auto"
+    "cookieSource": "auto",
+    "removeSponsorBlock": false
   },
   "instagram": {
     "downloadFolder": "V:\\GrabIt",

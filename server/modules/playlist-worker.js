@@ -27,11 +27,10 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 
+const { getCookiesArgs }              = require('./cookies');
 const { videoCache, formatCache }     = require('./cache');
-const { broadcast }                   = require('./websocket');
+const { broadcastPlaylistProgress }   = require('./websocket');
 const { buildFullFormatsFromMeta }    = require('./detector');
-const playlistStore                    = require('./playlist-store');
-const log                              = require('./logger').child('playlist-worker.js');
 
 const MAX_WORKERS  = 5;
 const PROBE_LIMIT  = 200; // max videos to individually probe per playlist
@@ -48,15 +47,13 @@ const TIER_HEIGHTS = [144, 240, 360, 480, 720, 1080, 1440, 2160];
 const AUDIO_FMTS   = ['mp3', 'm4a', 'aac', 'opus', 'flac', 'wav', 'ogg'];
 
 /**
- * @param {string}   scanId      Unique playlist scan identifier (tab-specific)
  * @param {string}   playlistId  Playlist/list ID (for WS events)
  * @param {string}   tabId       Extension tab ID (for WS routing)
  * @param {object[]} entries     Flat entry objects from yt-dlp --flat-playlist
  * @param {string}   cookieFile  Path to cookies file (may be null)
  * @returns {{ cancel: () => void }} control handle
  */
-function startPlaylistEnrichment(scanId, playlistId, tabId, entries, cookieFile) {
-  log.info('startPlaylistEnrichment', 'Starting playlist enrichment', { scanId, playlistId, tabId, entryCount: entries?.length });
+function startPlaylistEnrichment(playlistId, tabId, entries, cookieFile) {
   let cancelled = false;
   const cancel  = () => { cancelled = true; };
 
@@ -73,17 +70,8 @@ function startPlaylistEnrichment(scanId, playlistId, tabId, entries, cookieFile)
   let completed = 0;
   let skipped   = 0;
 
-  // Broadcast initial state immediately and persist the scan state
-  const initialPayload = {
-    completed, total: probeCount, skipped,
-    videoTotals: { ...videoTotals },
-    audioTotals: { ...audioTotals },
-    totalDuration: 0,
-    done: false,
-    scanStatus: 'scanning'
-  };
-  playlistStore.patch(scanId, initialPayload);
-  _broadcast(scanId, playlistId, tabId, initialPayload);
+  // Broadcast initial state immediately
+  _broadcast(playlistId, tabId, { completed, total: probeCount, skipped, videoTotals: { ...videoTotals }, audioTotals: { ...audioTotals }, totalDuration: 0, done: false });
 
   // Run the worker pool
   _runPool(probeEntries, MAX_WORKERS, async (entry) => {
@@ -131,34 +119,23 @@ function startPlaylistEnrichment(scanId, playlistId, tabId, entries, cookieFile)
 
     if (cancelled) return;
 
-    const progressState = {
-      completed,
-      total: probeCount,
-      skipped,
+    // Broadcast progress after every completed video
+    _broadcast(playlistId, tabId, {
+      completed, total: probeCount, skipped,
       videoTotals: _extrapolate(videoTotals, completed, probeCount, total),
       audioTotals: _extrapolate(audioTotals, completed, probeCount, total),
       totalDuration: totalDuration.value,
-      done: false,
-      scanStatus: 'scanning'
-    };
-    playlistStore.patch(scanId, progressState);
-    _broadcast(scanId, playlistId, tabId, progressState);
+      done: false
+    });
   }).then(() => {
     if (cancelled) return;
-    const completeState = {
-      completed,
-      total: probeCount,
-      skipped,
+    _broadcast(playlistId, tabId, {
+      completed, total: probeCount, skipped,
       videoTotals: _extrapolate(videoTotals, completed, probeCount, total),
       audioTotals: _extrapolate(audioTotals, completed, probeCount, total),
       totalDuration: totalDuration.value,
-      done: true,
-      scanStatus: 'completed',
-      enriching: false
-    };
-    playlistStore.patch(scanId, completeState);
-    _broadcast(scanId, playlistId, tabId, completeState);
-    log.ok('startPlaylistEnrichment', 'Playlist enrichment completed', { scanId, playlistId, tabId, completed, total: probeCount, skipped });
+      done: true
+    });
   });
 
   return { cancel };
@@ -172,8 +149,8 @@ function _extrapolate(totals, completed, probeCount, total) {
   return Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, Math.round(v * scale)]));
 }
 
-function _broadcast(scanId, playlistId, tabId, data) {
-  broadcast('playlist_progress', { scanId, playlistId, tabId, ...data });
+function _broadcast(playlistId, tabId, data) {
+  broadcastPlaylistProgress(playlistId, tabId, data);
 }
 
 async function _probeVideo(url, cookieFile) {

@@ -84,10 +84,20 @@ function broadcast() {
 function initQueue() { console.log('[Queue] Initialized'); }
 
 function addToQueue(params) {
-  // Dedup: same url+action already active?
+  // Dedup: same url+action+options already active OR recently completed?
+  const recentCompletionCutoff = Date.now() - (60 * 60 * 1000); // 1 hour
+
   for (const item of queue.values()) {
-    if (item.url === params.url && item.action === params.action &&
-        (item.status === STATUSES.QUEUED || item.status === STATUSES.DOWNLOADING)) {
+    const isSameJob = item.url === params.url &&
+                      item.action === params.action &&
+                      JSON.stringify(item.options) === JSON.stringify(params.options);
+
+    const isActive = item.status === STATUSES.QUEUED || item.status === STATUSES.DOWNLOADING;
+    const isRecentlyCompleted =
+      (item.status === STATUSES.COMPLETE || item.status === STATUSES.CANCELLED) &&
+      item.completedAt && item.completedAt > recentCompletionCutoff;
+
+    if (isSameJob && (isActive || isRecentlyCompleted)) {
       console.log(`[Queue] Dedup: ${params.action} ${params.url}`);
       return item.id;
     }

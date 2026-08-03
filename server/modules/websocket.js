@@ -8,13 +8,14 @@
  *   download_complete   → { id, file, ... }
  *   download_error      → { id, error }
  *   probe_result        → { tabId, result }
- *   playlist_progress   → { scanId, playlistId, tabId, completed, total, videoTotals, audioTotals, totalDuration, done }
+ *   playlist_progress   → { playlistId, tabId, completed, total, videoTotals, audioTotals, totalDuration, done }
  *   slide_update        → { tabId, slideIndex }
  */
 
 'use strict';
 
 const { WebSocketServer } = require('ws');
+const { scanCache } = require('./scan-cache');
 
 let wss = null;
 const clients = new Set();
@@ -98,9 +99,31 @@ function broadcastProbeResult(tabId, result) {
   broadcast('probe_result', { tabId, result });
 }
 
-/** Called by playlist-worker.js as each batch of videos resolves. */
-function broadcastPlaylistProgress(scanId, playlistId, tabId, data) {
-  broadcast('playlist_progress', { scanId, playlistId, tabId, ...data });
+/**
+ * Called by playlist-worker.js as each batch of videos resolves.
+ * Also persists progress to scan cache.
+ */
+function broadcastPlaylistProgress(playlistId, tabId, data) {
+  // Broadcast to clients
+  broadcast('playlist_progress', { playlistId, tabId, ...data });
+
+  // Also save to scan cache
+  try {
+    const progress = {
+      playlistId,
+      tabId,
+      scannedCount: data.completed,
+      totalVideos: data.total,
+      videoTotals: data.videoTotals,
+      audioTotals: data.audioTotals,
+      totalDuration: data.totalDuration || 0,
+      completed: data.done,
+      lastUpdated: Date.now()
+    };
+    scanCache.save(tabId, playlistId, progress);
+  } catch (e) {
+    console.warn('[websocket] Failed to save scan progress:', e);
+  }
 }
 
 module.exports = {

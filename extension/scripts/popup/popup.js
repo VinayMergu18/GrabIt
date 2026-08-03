@@ -17,7 +17,6 @@ const state = {
   activeSettingsTab: 'youtube',
   currentTabId: null,
   currentUrl: '',
-  currentScanId: null,
   ytProbe: null,
   igProbe: null,
   genProbe: null,
@@ -53,16 +52,16 @@ function icon(name, size = 14) {
   const icons = {
     download: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>`,
     video: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/></svg>`,
-    audio: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z"/></svg>`,
+    audio: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z"/></svg>`,
     photo: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>`,
     playlist: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h10M4 18h10"/></svg>`,
-    folder: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>`,
+    folder: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>`,
     file: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>`,
     retry: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>`,
     x: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>`,
     check: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>`,
-    subs: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z"/></svg>`,
-    slides: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>`,
+    subs: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2v8a2 2 0 01-2 2h-3l-4 4z"/></svg>`,
+    slides: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1 1v-6z"/></svg>`,
     history: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`,
     link: `<svg width="${size}" height="${size}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101"/><path stroke-linecap="round" stroke-linejoin="round" d="M10.172 13.828a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.101 1.102"/></svg>`
   };
@@ -94,6 +93,48 @@ function timeAgo(ts) {
   if (diff < 3600000) return Math.floor(diff/60000) + 'm ago';
   if (diff < 86400000) return Math.floor(diff/3600000) + 'h ago';
   return Math.floor(diff/86400000) + 'd ago';
+}
+
+// Playlist progress persistence
+function savePlaylistProgress(tabId, playlistId, progress) {
+  const key = `playlistProgress-${tabId}-${playlistId}`;
+  chrome.storage.local.set({ [key]: progress });
+}
+
+function loadPlaylistProgress(tabId, playlistId) {
+  const key = `playlistProgress-${tabId}-${playlistId}`;
+  return new Promise((resolve) => {
+    chrome.storage.local.get([key], (result) => {
+      resolve(result[key] || null);
+    });
+  });
+}
+async function getCookiesForUrl(url) {
+  try {
+    const urlObj = new URL(url);
+    const domain = urlObj.hostname.startsWith('www.') ? urlObj.hostname.slice(4) : urlObj.hostname;
+    const cookies = await chrome.cookies.getAll({ domain });
+    if (cookies.length === 0) return '';
+    const lines = [
+      '# Netscape HTTP Cookie File',
+      '# Generated by GrabIt',
+      '',
+      ...cookies.map(c => {
+        const domainFlag = c.domain.startsWith('.') ? c.domain : '.' + c.domain;
+        const path = c.path || '/';
+        const secure = c.secure ? 'TRUE' : 'FALSE';
+        const expires = c.expirationDate ? Math.floor(c.expirationDate) : '0';
+        const name = c.name.replace(/\t/g, ' ');
+        const value = c.value.replace(/\t/g, ' ');
+        return [domainFlag, 'TRUE', path, secure, expires, name, value].join('\t');
+      }),
+      ''
+    ];
+    return lines.join('\n');
+  } catch (e) {
+    console.error('Failed to get cookies:', e);
+    return '';
+  }
 }
 async function getYouTubeCookieStoreId() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -332,18 +373,9 @@ function connectWS() {
   if (state.ws && state.ws.readyState === WebSocket.OPEN) return;
   try {
     state.ws = new WebSocket(WS_URL);
-    state.ws.onopen = () => {
-      clearTimeout(state.wsRetry);
-      console.debug('[Popup] WS connected');
-    };
+    state.ws.onopen = () => { clearTimeout(state.wsRetry); };
     state.ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        console.debug('[Popup] WS message', msg.type, msg);
-        handleWSMessage(msg);
-      } catch (err) {
-        console.warn('[Popup] WS message failed to parse', err);
-      }
+      try { handleWSMessage(JSON.parse(e.data)); } catch {}
     };
     state.ws.onclose = () => {
       state.wsRetry = setTimeout(connectWS, 3000);
@@ -362,14 +394,6 @@ function handleWSMessage(msg) {
   }
   if (msg.type === 'download_progress') {
     updateQueueItemProgress(msg.id, msg.progress);
-    // If this progress contains playlist counters, update the per-item playlist badge/text
-    if (typeof msg.playlistDownloaded !== 'undefined') {
-      const el = document.querySelector(`[data-qid="${msg.id}"] .qi-playlist`);
-      if (el) {
-        const name = msg.playlistName || el.dataset.playlistName || '';
-        el.textContent = `${name} - ${msg.playlistDownloaded}/${msg.playlistTotal}`;
-      }
-    }
   }
   if (msg.type === 'download_complete') {
     toast('Download complete!', 'success');
@@ -382,17 +406,18 @@ function handleWSMessage(msg) {
     // Slide DOM tracking removed — slide selection is user-driven via the slide grid
   }
   if (msg.type === 'playlist_progress') {
-    const hitScan = msg.scanId && state.currentScanId && msg.scanId === state.currentScanId;
-    const hitTab  = msg.tabId === state.currentTabId;
-    const hitPlaylist = !msg.scanId && state.ytProbe?.playlistId && msg.playlistId === state.ytProbe.playlistId;
-
-    if (!hitTab || (!hitScan && !hitPlaylist)) {
-      console.debug('[Popup] Ignoring playlist_progress from other scan', msg);
-      return;
+    // Only update UI and save progress if this message is for the current tab
+    if (msg.tabId === state.currentTabId) {
+      updatePlaylistProgress(msg);
+      // Save progress to storage
+      savePlaylistProgress(state.currentTabId, msg.playlistId, {
+        completed: msg.completed,
+        total: msg.total,
+        videoTotals: msg.videoTotals,
+        audioTotals: msg.audioTotals,
+        totalDuration: msg.totalDuration
+      });
     }
-
-    console.debug('[Popup] playlist_progress matched current scan', msg);
-    updatePlaylistProgress(msg);
   }
   if (msg.type === 'streams_updated') {
     if (state.activeTab === 'streams') loadStreams();
@@ -462,13 +487,30 @@ async function probeYT(url) {
   } catch {}
 
   // Stage 2: deep probe
-  state.currentScanId = null;
   try {
     const deep = await api('POST', '/probe/deep', { url, tabId: state.currentTabId });
     state.ytProbe = deep;
-    state.currentScanId = deep.scanId || null;
     document.getElementById('yt-loading').style.display = 'none';
     renderYTFull(deep, url);
+
+    // If it's a playlist, attempt to load saved progress and update UI
+    if (deep.contentType === 'playlist' || deep.contentType === 'mix_playlist') {
+      const saved = await loadPlaylistProgress(state.currentTabId, deep.playlistId || deep.title);
+      if (saved) {
+        // Create a message-like object for updatePlaylistProgress
+        const msg = {
+          playlistId: deep.playlistId || deep.title,
+          tabId: state.currentTabId,
+          completed: saved.completed,
+          total: saved.total,
+          videoTotals: saved.videoTotals,
+          audioTotals: saved.audioTotals,
+          totalDuration: saved.totalDuration,
+          done: false // Assume still in progress unless we have a way to know
+        };
+        updatePlaylistProgress(msg);
+      }
+    }
   } catch (e) {
     document.getElementById('yt-loading').style.display = 'none';
     document.getElementById('yt-content').innerHTML = `
@@ -476,8 +518,7 @@ async function probeYT(url) {
   }
 }
 
-// ── YouTube render — Stage 1 (instant placeholder) ────────────────────────────
-
+// ── YouTube render — Stage 1 (instant placeholder) ────────────────
 function renderYTQuick(quick, url) {
   const typeLabel = {
     video:'Video', short:'Short', live:'Live', music:'Music',
@@ -500,8 +541,7 @@ function renderYTQuick(quick, url) {
     <div style="padding:14px 10px;color:var(--text3);font-size:12px;text-align:center">Fetching metadata…</div>`;
 }
 
-// ── YouTube render — Stage 2 (full probe result) ──────────────────────────────
-
+// ── YouTube render — Stage 2 (full probe result) ──────────────────
 function renderYTFull(probe, url) {
   const isPlaylist = probe.contentType === 'playlist' || probe.contentType === 'mix_playlist';
   const isLive     = probe.contentType === 'live';
@@ -583,7 +623,7 @@ function renderYTFull(probe, url) {
 }
 
 function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s).replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>').replace(/"/g,'"');
 }
 
 function fmtCount(n) {
@@ -595,7 +635,6 @@ function fmtCount(n) {
 }
 
 // ── YouTube tab bar (Video / Video+Subs / Audio) ──────────────────────────────
-
 function renderYTVideoTabs(probe) {
   const subInfo = probe.subtitleInfo || {};
   const isPlaylist = probe.contentType === 'playlist' || probe.contentType === 'mix_playlist';
@@ -617,7 +656,6 @@ function renderYTVideoTabs(probe) {
 }
 
 // ── Video panel ───────────────────────────────────────────────────────────────
-
 function dedupeByHeight(list) {
   // Collapse multiple formats with the same height (e.g. 720p mp4 + 720p webm)
   // into a single row, keeping the variant with the largest known size.
@@ -673,7 +711,6 @@ function videoRow(f, idx) {
 }
 
 // ── Video+Subs panel ──────────────────────────────────────────────────────────
-
 function renderYTSubsPanel(probe) {
   const subInfo = probe.subtitleInfo || {};
   const isPlaylist = probe.contentType === 'playlist' || probe.contentType === 'mix_playlist';
@@ -688,7 +725,7 @@ function renderYTSubsPanel(probe) {
   }
 
   if (!hasSubs) return `<div style="padding:14px 10px;color:var(--text3);font-size:12px;text-align:center">
-    No subtitles or captions are available for this video.<br>Use the Video tab instead.</div>`;
+    Subtitles not available</div>`;
 
   const langs = subInfo.languages || [];
   let formats = (probe.videoSubFormats || probe.videoFormats || []).slice();
@@ -706,9 +743,8 @@ function renderYTSubsPanel(probe) {
       ${langs.map(l => {
         const label = `${escHtml(l.name || l.code)}${l.isAuto ? ' (auto)' : ' (manual)'}`;
         // Pre-select English if available, otherwise first language
-        const isSelected = (l.code === 'en' || l.code === 'en-US' || l.code === 'en-GB') &&
-                          !langs.some(l2 => l2.code === 'en' || l2.code === 'en-US' || l2.code === 'en-GB')
-                          ? l.code === 'en' || l.code === 'en-US' || l.code === 'en-GB'
+        const isSelected = langs.some(l => l.code === 'en' || l.code === 'en-US' || l.code === 'en-GB')
+                          ? (l.code === 'en' || l.code === 'en-US' || l.code === 'en-GB')
                           : l.code === defaultLang;
         return `<option value="${escHtml(l.code)}" ${isSelected ? 'selected' : ''}>${label}</option>`;
       }).join('')}
@@ -736,7 +772,6 @@ function renderYTSubsPanel(probe) {
 }
 
 // ── Audio panel ───────────────────────────────────────────────────────────────
-
 function renderYTAudioPanel(probe) {
   const fmts = probe.audioFormats || _defaultAudioFmts();
 
@@ -771,12 +806,13 @@ function _defaultAudioFmts() {
 }
 
 // ── Playlist panel ────────────────────────────────────────────────────────────
-
 function renderYTPlaylistUI(probe) {
   const vt  = probe.videoTotals  || {};
   const at  = probe.audioTotals  || {};
   const cnt = probe.itemCount    ?? '?';
   const dur = probe.duration     ? `· ${fmtDuration(probe.duration)}` : '';
+  const langs = (probe.subtitleInfo && probe.subtitleInfo.languages) || probe.subtitleLangs || [];
+  const defaultLang = (state.settings?.youtube?.autoSubtitleLang) || 'en';
 
   const loading = `<span id="pl-loading-tag" style="font-size:10px;color:var(--text3)"> Calculating…</span>`;
 
@@ -795,7 +831,7 @@ function renderYTPlaylistUI(probe) {
     </button>`).join('');
 
   // Video + subtitles rows
-  const defaultLang = (state.settings?.youtube?.autoSubtitleLang) || 'en';
+  // const defaultLang = (state.settings?.youtube?.autoSubtitleLang) || 'en';
   const subsVideoRows = qualities.map(({ h, label }) => `
     <button class="yt-quality-row" data-pl-action="download_playlist_subs" data-quality="${h}">
       <span class="yt-q-label">${label}</span>
@@ -817,7 +853,7 @@ function renderYTPlaylistUI(probe) {
   const progressBar = `
     <div id="pl-progress-bar" style="display:none;margin-top:8px">
       <div style="height:3px;background:var(--border);border-radius:2px">
-        <div id="pl-progress-fill" style="height:3px;background:var(--accent);border-radius:2px;width:0%;transition:width .3s"></div>
+        <div id="pl-progress-fill" style="height=3px;background:var(--accent);border-radius:2px;width:0%;transition:width .3s"></div>
       </div>
       <div id="pl-progress-label" style="font-size:10px;color:var(--text3);margin-top:3px;text-align:right"></div>
     </div>`;
@@ -844,18 +880,24 @@ function renderYTPlaylistUI(probe) {
 
     <!-- Video + Subs panel -->
     <div class="yt-tab-panel" id="pl-panel-subs" style="display:none">
-      <div class="yt-quality-label">Select quality — whole playlist with embedded subtitles:</div>
-      <div class="settings-row" style="padding:4px 0 6px;align-items:center;gap:8px">
-        <div class="settings-label" style="font-size:11px;white-space:nowrap">Subtitle language</div>
-        <select id="pl-subtitle-lang" class="settings-select" style="max-width:120px">
-          ${langs.map(l => {
-            const label = `${escHtml(l.name || l.code)}${l.isAuto ? ' (auto)' : ' (manual)'}`;
-            return `<option value="${escHtml(l.code)}" ${l.code === defaultLang ? 'selected' : ''}>${label}</option>`;
-          }).join('')}
-        </select>
-      </div>
-      <div class="yt-quality-list">${subsVideoRows}</div>
-      ${progressBar.replace(/id="pl-progress/g, 'id="pl-progress-subs')}
+      ${langs.length === 0 ? `
+        <div style="padding:14px 10px;color:var(--text3);font-size:12px;text-align:center">
+          Subtitles not available
+        </div>
+      ` : `
+        <div class="yt-quality-label">Select quality — whole playlist with embedded subtitles:</div>
+        <div class="settings-row" style="padding:4px 0 6px;align-items:center;gap:8px">
+          <div class="settings-label" style="font-size:11px;white-space:nowrap">Subtitle language</div>
+          <select id="pl-subtitle-lang" class="settings-select" style="max-width:120px">
+            ${langs.map(l => {
+              const label = `${escHtml(l.name || l.code)}${l.isAuto ? ' (auto)' : ' (manual)'}`;
+              return `<option value="${escHtml(l.code)}" ${l.code === defaultLang ? 'selected' : ''}>${label}</option>`;
+            }).join('')}
+          </select>
+        </div>
+        <div class="yt-quality-list">${subsVideoRows}</div>
+        ${progressBar.replace(/id="pl-progress/g, 'id="pl-progress-subs')}
+      `}
     </div>
 
     <!-- Audio panel -->
@@ -919,7 +961,6 @@ function updatePlaylistProgress(msg) {
 }
 
 // ── Wire-up ───────────────────────────────────────────────────────────────────
-
 function wireYTTabs(probe, url) {
   document.querySelectorAll('.yt-tab:not([disabled])').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -1003,23 +1044,12 @@ function wireYTPlaylist(probe, url) {
         const langInput = document.getElementById('pl-subtitle-lang');
         options.subtitleLang = (langInput && langInput.value.trim()) || 'en';
       }
-
-      // Attach playlist metadata so the server / downloader can report per-playlist counts
-      // to the popup (playlistTotal and playlistName are derived from the probe result).
-      try {
-        options.playlistTotal = probe.total ?? probe.itemCount ?? probe.totalCount ?? null;
-        options.playlistName  = probe.title || null;
-        // initialize downloaded counter client-side (server will increment during download)
-        options.playlistDownloaded = options.playlistDownloaded || 0;
-      } catch (e) { /* ignore */ }
-
       startDownload({ url, action, platform: 'youtube', title: probe.title, options });
     });
   });
 }
 
 // ── Web Stream Detection ──────────────────────────────────────────────────────
-
 const TYPE_COLOURS = {
   HLS:  { bg: '#fef3c7', border: '#d97706', text: '#92400e' },
   DASH: { bg: '#ede9fe', border: '#7c3aed', text: '#4c1d95' },
@@ -1079,27 +1109,39 @@ function renderStreams(container, streams) {
   }
 
   const TYPE_ORDER = ['HLS','DASH','MP4','WebM','MKV','MOV','FLV','TS','Stream'];
-  const sorted     = TYPE_ORDER.filter(t => groups[t]);
-
-  container.innerHTML = sorted.map(type => `
-    <div class="yt-quality-label" style="margin-top:8px">${typeBadge(type)} ${type === 'HLS' ? 'HLS Streams (m3u8)' : type === 'DASH' ? 'DASH Streams (mpd)' : `${type} Files`} <span style="color:var(--text3)">(${groups[type].length})</span></div>
-    <div class="yt-quality-list">
-      ${groups[type].map((s, i) => streamRow(s, i)).join('')}
-    </div>`).join('');
+  let html = '';
+  let index = 0;
+  for (const type of TYPE_ORDER) {
+    if (!groups[type]) continue;
+    html += `
+      <div class="yt-quality-label" style="margin-top:8px">${typeBadge(type)} ${type === 'HLS' ? 'HLS Streams (m3u8)' : type === 'DASH' ? 'DASH Streams (mpd)' : `${type} Files`} <span style="color:var(--text3)">(${groups[type].length})</span></div>
+      <div class="yt-quality-list">
+        ${groups[type].map((s, i) => {
+          const globalIndex = index++;
+          return streamRow(s, globalIndex);
+        }).join('')}
+      </div>`;
+  }
+  container.innerHTML = html;
 
   // Bind download buttons
-  container.querySelectorAll('[data-stream-url]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const url  = btn.dataset.streamUrl;
-      const type = btn.dataset.streamType;
-      const name = btn.dataset.streamName;
-      const qual = btn.dataset.quality || '';
+  container.querySelectorAll('.download-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const url   = btn.dataset.url;
+      const type  = btn.dataset.type;
+      const name  = btn.dataset.name;
+      const select = document.getElementById(`quality-select-${btn.dataset.idx}`);
+      const quality = select ? select.value : '';
+
+      // Get cookies for the URL
+      const cookies = await getCookiesForUrl(url);
+
       startDownload({
         url,
         action:   'download_stream',
         platform: 'generic',
         title:    name,
-        options:  { streamType: type, name, quality: qual }
+        options:  { streamType: type, name, quality: quality, cookies: cookies }
       });
       btn.textContent = '⏳';
       btn.disabled    = true;
@@ -1122,16 +1164,44 @@ function streamRow(s, idx) {
 
   const time = s.ts ? new Date(s.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
 
+  // Determine the list of qualities to show in the dropdown
+  let qualityList;
+  if (s.qualities && Array.isArray(s.qualities) && s.qualities.length > 0) {
+    qualityList = s.qualities;
+  } else {
+    qualityList = ['Best','4K','1440p','1080p','720p','480p','360p','240p','144p','High','Medium','Low'];
+  }
+
+  const optionsHTML = qualityList.map(q => {
+    const value = q === 'Best' ? '' : q;
+    // Determine selected option:
+    // 1. If we have specific qualities from detector, select the first (highest) one
+    // 2. Else if we have a guessed quality that guessed quality, use it
+    // 3. Else default to 'Best'
+    let selected = false;
+    if (s.qualities && s.qualities.length > 0) {
+      selected = (q === s.qualities[0]); // First (highest) quality from detector
+    } else if (s.quality && qualityList.includes(s.quality)) {
+      selected = (s.quality === q);
+    } else {
+      selected = (q === 'Best');
+    }
+    return `<option value="${value}" ${selected}>${q}</option>`;
+  }).join('');
+
   return `<div class="yt-quality-row" style="flex-direction:column;align-items:flex-start;gap:3px;cursor:default;padding:8px 10px">
     <div style="display:flex;align-items:center;gap:6px;width:100%">
       ${typeBadge(s.type)}${qualBadge}
       <span style="font-size:11px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(s.name)}">${escHtml(s.name)}</span>
-      <button class="btn btn-primary" style="font-size:11px;padding:3px 10px;white-space:nowrap"
-        data-stream-url="${escHtml(s.url)}" data-stream-type="${s.type}" data-stream-name="${escHtml(s.name)}" data-quality="">
+      <select class="quality-select" id="quality-select-${idx}" style="margin-left:4px;">
+        ${optionsHTML}
+      </select>
+      <button class="btn btn-primary download-btn" style="font-size:11px;padding:3px 10px;white-space:nowrap"
+        data-url="${escHtml(s.url)}" data-type="${s.type}" data-name="${escHtml(s.name)}" data-idx="${idx}">
         ⬇ Download
       </button>
     </div>
-    <div style="font-size:10px;color:var(--text3);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%" title="${escHtml(s.url)}">${escHtml(display)}</div>
+    <div style="font-size:10px;color:var(--text3);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width=100%" title="${escHtml(s.url)}">${escHtml(display)}</div>
     ${time ? `<div style="font-size:10px;color:var(--text3)">Detected at ${time}</div>` : ''}
   </div>`;
 }
@@ -1183,7 +1253,7 @@ function renderIG(url) {
           ${icon('video')} <span class="btn-label">Download Reel</span>
         </button>
         <button class="btn btn-secondary" id="ig-dl-reel-audio">
-          ${icon('audio')} <span class="btn-label">Audio Only</span>
+          ${icon('audio')} <span class="btn-label">Audio Only</span
         </button>
       </div>
     </div>
@@ -1257,12 +1327,13 @@ function renderIG(url) {
     const postId = url.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/)?.[2] || 'Carousel';
     startDownload({ url, action: 'download_all_slides', platform: 'instagram',
       title: `Carousel_${postId}`, options: {} });
-  });
-  document.getElementById('ig-dl-slide')?.addEventListener('click', () => {
-    const slideNum = Math.max(1, parseInt(document.getElementById('ig-slide-num')?.value || 1));
-    const slideObj = { index: slideNum - 1 };
-    startDownload({ url, action: 'download_slide', platform: 'instagram',
-      title: `Slide_${slideNum}`, options: { slide: slideObj, slideIndex: slideNum - 1 } });
+    });
+    document.getElementById('ig-dl-slide')?.addEventListener('click', () => {
+      const slideNum = Math.max(1, parseInt(document.getElementById('ig-slide-num')?.value || 1));
+      const slideObj = { index: slideNum - 1 };
+      const postId = url.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/)?.[2] || 'Carousel';
+      startDownload({ url, action: 'download_slide', platform: 'instagram',
+      title: `Slide_${slideNum}_${postId}`, options: { slide: slideObj, slideIndex: slideNum - 1 } });
   });
 }
 
@@ -1472,34 +1543,28 @@ function renderQueue() {
     const isDone = item.status === 'complete';
     const isFailed = item.status === 'failed';
 
-    // Show playlist meta if available (e.g. playlistTotal)
-    const playlistMeta = item.options && typeof item.options.playlistTotal === 'number'
-      ? `<div class="qi-playlist" data-qid-playlist="${item.id}" data-playlist-name="${escHtml(item.options.playlistName || item.title || '')}" style="font-size:11px;color:var(--text3);margin-top:4px">${escHtml(item.options.playlistName || item.title || '')} - ${item.options.playlistDownloaded || 0}/${item.options.playlistTotal}</div>`
-      : '';
-
     return `<div class="queue-item" data-qid="${item.id}">
       <div class="qi-header">
-        <div class="qi-title" title="${escHtml(item.title || item.url)}">${escHtml(item.title || item.url)}</div>
+        <div class="qi-title" title="${item.title || item.url}">${item.title || item.url}</div>
         <div class="qi-status ${statusClass}">${
           isActive ? `<div class="spinner" style="width:12px;height:12px;border-width:1.5px"></div>` : ''
         } ${item.status}</div>
       </div>
-      ${playlistMeta}
       <div class="progress-bar-wrap">
         <div class="progress-bar ${isDone ? 'complete' : ''}" style="width:${isDone ? 100 : pct}%"></div>
       </div>
       <div class="qi-meta">
-        <span class="qi-speed">${escHtml([item.progress?.speed, item.progress?.eta ? `ETA ${item.progress.eta}` : ''].filter(Boolean).join(' · '))}</span>
+        <span class="qi-speed">${[item.progress?.speed, item.progress?.eta ? `ETA ${item.progress.eta}` : ''].filter(Boolean).join(' · ')}</span>
         <span class="qi-percent">${item.progress?.percent || 0}%</span>
       </div>
-      ${item.error ? `<div style="font-size:11px;color:var(--red);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(item.error)}">${escHtml(item.error)}</div>` : ''}
+      ${item.error ? `<div style="font-size:11px;color:var(--red);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${item.error}">${item.error}</div>` : ''}
       <div class="qi-actions">
         ${isFailed || item.status === 'cancelled' ? `<button class="qi-btn success" data-qaction="retry" data-id="${item.id}">${icon('retry', 12)} Retry</button>` : ''}
         ${isDone && item.file ? `<button class="qi-btn" data-qaction="open-file" data-file="${item.file}">Open File</button>` : ''}
         ${isDone && item.folder ? `<button class="qi-btn" data-qaction="open-folder" data-folder="${item.folder}">Open Folder</button>` : ''}
         ${isDone && item.file && !item.folder ? `<button class="qi-btn" data-qaction="open-folder" data-file="${item.file}">Open Folder</button>` : ''}
-        ${!isDone && !isFailed ? `<button class="qi-btn danger" data-qaction="cancel" data-id="${item.id}">${icon('x', 11)} Cancel</button>` : ''}
-        ${isDone || isFailed ? `<button class="qi-btn danger" data-qaction="remove" data-id="${item.id}">${icon('x', 11)}</button>` : ''}
+        ${!isDone && !isFailed && item.status !== 'cancelled' ? `<button class="qi-btn danger" data-qaction="cancel" data-id="${item.id}">${icon('x', 11)} Cancel</button>` : ''}
+        ${isDone || isFailed || item.status === 'cancelled' ? `<button class="qi-btn danger" data-qaction="remove" data-id="${item.id}">${icon('x', 11)}</button>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -1661,7 +1726,7 @@ function renderSettings() {
           <select class="settings-select" data-section="youtube" data-key="retryCount">
             ${[0,1,2,3,5].map(n => `<option value="${n}" ${yt.retryCount == n ? 'selected':''}>${n}</option>`).join('')}
           </select>
-        </div>
+        </div
         <div class="settings-row">
           <div class="settings-label">Remove SponsorBlock segments</div>
           ${toggleHtml('youtube', 'removeSponsorBlock', yt.removeSponsorBlock)}
@@ -1754,7 +1819,7 @@ function renderSettings() {
         <div class="settings-section-title">Behaviour</div>
         <div class="settings-row">
           <div class="settings-label">Concurrent downloads</div>
-          <select class="settings-select" data-section="generic" data-key="concurrentDownloads">
+          <select class="settings-select" data-section="generic" data-key="concurrentDownloads>
             ${[1,2,3,4].map(n => `<option value="${n}" ${gen.concurrentDownloads == n ? 'selected':''}>${n}</option>`).join('')}
           </select>
         </div>
@@ -2005,7 +2070,27 @@ async function init() {
     loadQueue();
   }
 
-  document.getElementById('streams-refresh')?.addEventListener('click', loadStreams);
+  const refreshBtn = document.getElementById('streams-refresh');
+  if (refreshBtn) {
+    let lastClickTime = 0;
+    const DOUBLE_CLICK_DELAY = 300;
+    refreshBtn.addEventListener('click', e => {
+      const now = Date.now();
+      const delta = now - lastClickTime;
+      lastClickTime = now;
+      if (delta < DOUBLE_CLICK_DELAY) {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+          if (tabs[0] && tabs[0].id) {
+            chrome.tabs.reload(tabs[0].id);
+          }
+        });
+        return;
+      }
+      loadStreams();
+    });
+  }
   document.getElementById('streams-clear')?.addEventListener('click', async () => {
     await new Promise(res => chrome.runtime.sendMessage({ type: 'CLEAR_STREAMS' }, res));
     loadStreams();

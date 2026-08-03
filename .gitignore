@@ -5,3 +5,28 @@ logs/grabit.log
 # Session and history data
 server/data/cookies.txt
 server/data/history.json
+server/data/settings.json
+
+#GrabIt Files
+GrabIt.zip
+VDOWN/
+quality_sorting/
+stream_integration/
+extension/scripts/popup/popup.js.backup
+extension/scripts/popup/popup.js.backup2
+server/modules/cookies.js.backup
+server/cache/*
+
+
+
+#Stable Dates
+23/07/2026v  #Stream Partialy Working, im on it gng. its just me and Ai, 0 Knowledge Me and Invincible Ai.
+
+
+#WorkFlow Files
+VDOWN_WORKFLOW_EXPLANATION.txt
+extension/scripts/content/detectors/obfuscated_meaning.txt
+obfuscated_meaning.txt
+INTEGRATION_SUMMARY.md
+
+

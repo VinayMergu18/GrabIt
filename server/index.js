@@ -4,31 +4,16 @@
  * Starts HTTP + WebSocket on port 7272.
  */
 
-const fs = require('fs');
-const path = require('path');
-
-// Clear server cache directory as early as possible (before other modules run)
-const CACHE_DIR = path.join(__dirname, 'cache');
-try {
-  if (fs.existsSync(CACHE_DIR)) {
-    fs.rmSync(CACHE_DIR, { recursive: true, force: true });
-    console.log(`[GrabIt] Cleared server cache directory at startup: ${CACHE_DIR}`);
-  }
-  fs.mkdirSync(CACHE_DIR, { recursive: true });
-} catch (err) {
-  console.error('[GrabIt] Failed to clear/recreate cache dir:', err && err.message ? err.message : err);
-}
-
 const express = require('express');
 const { createServer } = require('http');
 const cors = require('cors');
+const path = require('path');
 
 const { initWebSocket } = require('./modules/websocket');
 const { initDB } = require('./modules/db');
 const { startupCookieExtract } = require('./modules/cookies');
 const { initQueue } = require('./modules/queue');
 const { log, LOG_FILE, ERR_FILE } = require('./modules/logger');
-const playlistStore = require('./modules/playlist-store');
 
 const probeRoutes = require('./modules/routes/probe');
 const downloadRoutes = require('./modules/routes/download');
@@ -38,6 +23,7 @@ const settingsRoutes = require('./modules/routes/settings');
 const slideRoutes = require('./modules/routes/slide');
 const cookiesRoutes = require('./modules/routes/cookies');
 const logsRoutes    = require('./modules/routes/logs');
+const playlistStore = require('./modules/playlist-store');
 
 const PORT = 7272;
 
@@ -45,10 +31,9 @@ async function main() {
   log.info('main', 'GrabIt server starting v3.0');
   log.info('main', `Log files`, { main: LOG_FILE, errors: ERR_FILE });
 
-  // Clear stale playlist cache files from previous runs before startup
+
   playlistStore.clearAll();
   log.ok('main', 'Cleared playlist cache files after startup');
-
   // Init persistent storage
   await initDB();
   log.ok('main', 'Database initialised');
@@ -105,13 +90,27 @@ async function main() {
   const httpServer = createServer(app);
   initWebSocket(httpServer);
 
-  httpServer.listen(PORT, '127.0.0.1', () => {
-    log.ok('main', `Server ready`, { http: `http://127.0.0.1:${PORT}`, ws: `ws://127.0.0.1:${PORT}` });
-    log.ok('main', `Logs writing to ${LOG_FILE}`);
-    console.log(`\n[GrabIt] Server ready — http://127.0.0.1:${PORT}`);
-    console.log(`[GrabIt] Live logs: tail -f "${LOG_FILE}"`);
-    console.log(`[GrabIt] Errors only: tail -f "${ERR_FILE}"\n`);
-  });
+  httpServer.listen(PORT, '127.0.0.1')
+    .on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        log.error('main', `Address already in use: ${err.address}:${err.port}`, err);
+        console.error(`\n[GrabIt] Error: Address already in use ${err.address}:${err.port}`);
+        console.error('[GrabIt] Another instance of GrabIt may already be running.');
+        console.error('[GrabIt] Please stop the existing instance or change the port in server/index.js\n');
+        process.exit(1);
+      } else {
+        log.error('main', `Server error: ${err.message}`, err);
+        console.error(`\n[GrabIt] Server error: ${err.message}\n`);
+        process.exit(1);
+      }
+    })
+    .on('listening', () => {
+      log.ok('main', `Server ready`, { http: `http://127.0.0.1:${PORT}`, ws: `ws://127.0.0.1:${PORT}` });
+      log.ok('main', `Logs writing to ${LOG_FILE}`);
+      console.log(`\n[GrabIt] Server ready — http://127.0.0.1:${PORT}`);
+      console.log(`[GrabIt] Live logs: tail -f "${LOG_FILE}"`);
+      console.log(`[GrabIt] Errors only: tail -f "${ERR_FILE}"\n`);
+    });
 
   process.on('uncaughtException', (err) => {
     log.error('uncaughtException', err.message, err);
