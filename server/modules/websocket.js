@@ -8,7 +8,7 @@
  *   download_complete   → { id, file, ... }
  *   download_error      → { id, error }
  *   probe_result        → { tabId, result }
- *   playlist_progress   → { playlistId, tabId, completed, total, videoTotals, audioTotals, totalDuration, done }
+ *   playlist_progress   → { scanId, playlistId, tabId, completed, total, videoTotals, audioTotals, totalDuration, done }
  *   slide_update        → { tabId, slideIndex }
  */
 
@@ -99,8 +99,8 @@ function broadcastProbeResult(tabId, result) {
 }
 
 /** Called by playlist-worker.js as each batch of videos resolves. */
-function broadcastPlaylistProgress(playlistId, tabId, data) {
-  broadcast('playlist_progress', { playlistId, tabId, ...data });
+function broadcastPlaylistProgress(scanId, playlistId, tabId, data) {
+  broadcast('playlist_progress', { scanId, playlistId, tabId, ...data });
 }
 
 module.exports = {

@@ -17,6 +17,7 @@ const state = {
   activeSettingsTab: 'youtube',
   currentTabId: null,
   currentUrl: '',
+  currentScanId: null,
   ytProbe: null,
   igProbe: null,
   genProbe: null,
@@ -331,9 +332,18 @@ function connectWS() {
   if (state.ws && state.ws.readyState === WebSocket.OPEN) return;
   try {
     state.ws = new WebSocket(WS_URL);
-    state.ws.onopen = () => { clearTimeout(state.wsRetry); };
+    state.ws.onopen = () => {
+      clearTimeout(state.wsRetry);
+      console.debug('[Popup] WS connected');
+    };
     state.ws.onmessage = (e) => {
-      try { handleWSMessage(JSON.parse(e.data)); } catch {}
+      try {
+        const msg = JSON.parse(e.data);
+        console.debug('[Popup] WS message', msg.type, msg);
+        handleWSMessage(msg);
+      } catch (err) {
+        console.warn('[Popup] WS message failed to parse', err);
+      }
     };
     state.ws.onclose = () => {
       state.wsRetry = setTimeout(connectWS, 3000);
@@ -352,6 +362,14 @@ function handleWSMessage(msg) {
   }
   if (msg.type === 'download_progress') {
     updateQueueItemProgress(msg.id, msg.progress);
+    // If this progress contains playlist counters, update the per-item playlist badge/text
+    if (typeof msg.playlistDownloaded !== 'undefined') {
+      const el = document.querySelector(`[data-qid="${msg.id}"] .qi-playlist`);
+      if (el) {
+        const name = msg.playlistName || el.dataset.playlistName || '';
+        el.textContent = `${name} - ${msg.playlistDownloaded}/${msg.playlistTotal}`;
+      }
+    }
   }
   if (msg.type === 'download_complete') {
     toast('Download complete!', 'success');
@@ -364,6 +382,16 @@ function handleWSMessage(msg) {
     // Slide DOM tracking removed — slide selection is user-driven via the slide grid
   }
   if (msg.type === 'playlist_progress') {
+    const hitScan = msg.scanId && state.currentScanId && msg.scanId === state.currentScanId;
+    const hitTab  = msg.tabId === state.currentTabId;
+    const hitPlaylist = !msg.scanId && state.ytProbe?.playlistId && msg.playlistId === state.ytProbe.playlistId;
+
+    if (!hitTab || (!hitScan && !hitPlaylist)) {
+      console.debug('[Popup] Ignoring playlist_progress from other scan', msg);
+      return;
+    }
+
+    console.debug('[Popup] playlist_progress matched current scan', msg);
     updatePlaylistProgress(msg);
   }
   if (msg.type === 'streams_updated') {
@@ -434,9 +462,11 @@ async function probeYT(url) {
   } catch {}
 
   // Stage 2: deep probe
+  state.currentScanId = null;
   try {
     const deep = await api('POST', '/probe/deep', { url, tabId: state.currentTabId });
     state.ytProbe = deep;
+    state.currentScanId = deep.scanId || null;
     document.getElementById('yt-loading').style.display = 'none';
     renderYTFull(deep, url);
   } catch (e) {
@@ -973,6 +1003,16 @@ function wireYTPlaylist(probe, url) {
         const langInput = document.getElementById('pl-subtitle-lang');
         options.subtitleLang = (langInput && langInput.value.trim()) || 'en';
       }
+
+      // Attach playlist metadata so the server / downloader can report per-playlist counts
+      // to the popup (playlistTotal and playlistName are derived from the probe result).
+      try {
+        options.playlistTotal = probe.total ?? probe.itemCount ?? probe.totalCount ?? null;
+        options.playlistName  = probe.title || null;
+        // initialize downloaded counter client-side (server will increment during download)
+        options.playlistDownloaded = options.playlistDownloaded || 0;
+      } catch (e) { /* ignore */ }
+
       startDownload({ url, action, platform: 'youtube', title: probe.title, options });
     });
   });
@@ -1432,21 +1472,27 @@ function renderQueue() {
     const isDone = item.status === 'complete';
     const isFailed = item.status === 'failed';
 
+    // Show playlist meta if available (e.g. playlistTotal)
+    const playlistMeta = item.options && typeof item.options.playlistTotal === 'number'
+      ? `<div class="qi-playlist" data-qid-playlist="${item.id}" data-playlist-name="${escHtml(item.options.playlistName || item.title || '')}" style="font-size:11px;color:var(--text3);margin-top:4px">${escHtml(item.options.playlistName || item.title || '')} - ${item.options.playlistDownloaded || 0}/${item.options.playlistTotal}</div>`
+      : '';
+
     return `<div class="queue-item" data-qid="${item.id}">
       <div class="qi-header">
-        <div class="qi-title" title="${item.title || item.url}">${item.title || item.url}</div>
+        <div class="qi-title" title="${escHtml(item.title || item.url)}">${escHtml(item.title || item.url)}</div>
         <div class="qi-status ${statusClass}">${
           isActive ? `<div class="spinner" style="width:12px;height:12px;border-width:1.5px"></div>` : ''
         } ${item.status}</div>
       </div>
+      ${playlistMeta}
       <div class="progress-bar-wrap">
         <div class="progress-bar ${isDone ? 'complete' : ''}" style="width:${isDone ? 100 : pct}%"></div>
       </div>
       <div class="qi-meta">
-        <span class="qi-speed">${[item.progress?.speed, item.progress?.eta ? `ETA ${item.progress.eta}` : ''].filter(Boolean).join(' · ')}</span>
+        <span class="qi-speed">${escHtml([item.progress?.speed, item.progress?.eta ? `ETA ${item.progress.eta}` : ''].filter(Boolean).join(' · '))}</span>
         <span class="qi-percent">${item.progress?.percent || 0}%</span>
       </div>
-      ${item.error ? `<div style="font-size:11px;color:var(--red);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${item.error}">${item.error}</div>` : ''}
+      ${item.error ? `<div style="font-size:11px;color:var(--red);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(item.error)}">${escHtml(item.error)}</div>` : ''}
       <div class="qi-actions">
         ${isFailed || item.status === 'cancelled' ? `<button class="qi-btn success" data-qaction="retry" data-id="${item.id}">${icon('retry', 12)} Retry</button>` : ''}
         ${isDone && item.file ? `<button class="qi-btn" data-qaction="open-file" data-file="${item.file}">Open File</button>` : ''}

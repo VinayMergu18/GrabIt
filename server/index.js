@@ -4,16 +4,31 @@
  * Starts HTTP + WebSocket on port 7272.
  */
 
+const fs = require('fs');
+const path = require('path');
+
+// Clear server cache directory as early as possible (before other modules run)
+const CACHE_DIR = path.join(__dirname, 'cache');
+try {
+  if (fs.existsSync(CACHE_DIR)) {
+    fs.rmSync(CACHE_DIR, { recursive: true, force: true });
+    console.log(`[GrabIt] Cleared server cache directory at startup: ${CACHE_DIR}`);
+  }
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+} catch (err) {
+  console.error('[GrabIt] Failed to clear/recreate cache dir:', err && err.message ? err.message : err);
+}
+
 const express = require('express');
 const { createServer } = require('http');
 const cors = require('cors');
-const path = require('path');
 
 const { initWebSocket } = require('./modules/websocket');
 const { initDB } = require('./modules/db');
 const { startupCookieExtract } = require('./modules/cookies');
 const { initQueue } = require('./modules/queue');
 const { log, LOG_FILE, ERR_FILE } = require('./modules/logger');
+const playlistStore = require('./modules/playlist-store');
 
 const probeRoutes = require('./modules/routes/probe');
 const downloadRoutes = require('./modules/routes/download');
@@ -29,6 +44,10 @@ const PORT = 7272;
 async function main() {
   log.info('main', 'GrabIt server starting v3.0');
   log.info('main', `Log files`, { main: LOG_FILE, errors: ERR_FILE });
+
+  // Clear stale playlist cache files from previous runs before startup
+  playlistStore.clearAll();
+  log.ok('main', 'Cleared playlist cache files after startup');
 
   // Init persistent storage
   await initDB();

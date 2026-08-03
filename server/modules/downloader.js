@@ -115,6 +115,30 @@ function spawnProcess(bin, args, downloadId, item, parseLine) {
         const f = destMatch[1].trim();
         files.push(f);
         if (item && !item.tempFiles.includes(f)) item.tempFiles.push(f);
+
+        // If this queue item represents a playlist download (server-side options set by probe/popup),
+        // increment the per-playlist downloaded counter and reset per-file progress so the UI
+        // shows a fresh progress bar for the next file.
+        try {
+          if (item && item.options && typeof item.options.playlistTotal === 'number') {
+            item.options.playlistDownloaded = (item.options.playlistDownloaded || 0) + 1;
+            // Reset file-level progress so bar goes back to 0 for the new file
+            item.progress = { percent: 0, speed: null, eta: null, totalSize: null };
+
+            // Broadcast immediate progress update including playlist counts so the popup can update
+            // the per-item playlist badge without waiting for a full queue refresh.
+            const ws = require('./websocket');
+            ws.broadcast('download_progress', {
+              id: downloadId,
+              progress: item.progress,
+              playlistDownloaded: item.options.playlistDownloaded,
+              playlistTotal: item.options.playlistTotal,
+              playlistName: item.options.playlistName || item.title
+            });
+          }
+        } catch (e) {
+          log.warn('spawnProcess', 'Failed to update playlist counters', { error: e.message });
+        }
       }
       const mergeMatch = line.match(/Merging formats into "(.+)"/);
       if (mergeMatch) files.push(mergeMatch[1].trim());

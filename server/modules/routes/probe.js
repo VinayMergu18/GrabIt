@@ -22,9 +22,31 @@ const log     = require('../logger').child('routes/probe.js');
 const { quickAnalyze, probeYouTube, probeInstagram, probeGeneric, detectPlatform, detectYouTubeType } = require('../detector');
 const { broadcastProbeResult } = require('../websocket');
 const { getCookiesFilePath }   = require('../cookies');
+const playlistStore            = require('../playlist-store');
 
-// Active playlist enrichment handles keyed by playlistId
+// Active playlist enrichment handles keyed by scanId
 const activeEnrichments = new Map();
+
+function _scanId(tabId, playlistId) {
+  return `tab-${tabId}:${playlistId || 'unknown'}`;
+}
+
+function _startEnrichment(playlistResult, tabId, scanId) {
+  if (!playlistResult.entries?.length || !playlistResult.enriching) return;
+  if (!scanId) return;
+
+  // Cancel any stale enrichment for the same tab+playlist scan
+  if (activeEnrichments.has(scanId)) return;
+
+  const { startPlaylistEnrichment } = require('../playlist-worker');
+  const cookieFile = getCookiesFilePath?.() || null;
+
+  const handle = startPlaylistEnrichment(scanId, playlistResult.playlistId, tabId, playlistResult.entries, cookieFile);
+  activeEnrichments.set(scanId, handle);
+
+  // Auto-cleanup after 30 minutes regardless of whether the scan completes
+  setTimeout(() => { activeEnrichments.delete(scanId); }, 30 * 60 * 1000);
+}
 
 // Stage 1: Instant URL analysis
 router.get('/quick', (req, res) => {
@@ -68,7 +90,37 @@ router.post('/deep', async (req, res) => {
 
     if (tabId) broadcastProbeResult(tabId, result);
     if (result.contentType === 'playlist' || result.contentType === 'mix_playlist') {
-      _startEnrichment(result, tabId);
+      const scanId = _scanId(tabId, result.playlistId || result.title || url);
+      const existing = playlistStore.get(scanId);
+
+      if (existing) {
+        log.info('POST /deep', 'Returning existing playlist scan state', { scanId, tabId, playlistId: existing.playlistId, scanStatus: existing.scanStatus });
+        if (existing.scanStatus === 'scanning' && !activeEnrichments.has(scanId)) {
+          _startEnrichment(existing, tabId, scanId);
+        }
+        const { entries: _entries, ...safeExisting } = existing;
+        if (tabId) broadcastProbeResult(tabId, safeExisting);
+        return res.json(safeExisting);
+      }
+
+      const scanState = playlistStore.save(scanId, {
+        ...result,
+        scanId,
+        tabId,
+        playlistTitle: result.title,
+        scanStatus: 'scanning',
+        completed: 0,
+        skipped: 0,
+        total: result.itemCount,
+        totalDuration: 0,
+        done: false,
+        lastUpdated: Date.now(),
+        enriching: result.entries?.length > 0
+      });
+
+      _startEnrichment(scanState, tabId, scanId);
+      const { entries: _entries, ...safe } = scanState;
+      return res.json(safe);
     }
 
     const { entries: _entries, ...safe } = result;
@@ -84,8 +136,13 @@ router.post('/deep', async (req, res) => {
 
 // Cancel an in-progress playlist enrichment
 router.post('/cancel/:id', (req, res) => {
-  const handle = activeEnrichments.get(req.params.id);
-  if (handle) { handle.cancel(); activeEnrichments.delete(req.params.id); }
+  const scanId = req.params.id;
+  const handle = activeEnrichments.get(scanId);
+  if (handle) {
+    handle.cancel();
+    activeEnrichments.delete(scanId);
+  }
+  playlistStore.patch(scanId, { scanStatus: 'cancelled', done: true, enriching: false });
   res.json({ ok: true });
 });
 
@@ -109,24 +166,5 @@ router.post('/batch', async (req, res) => {
   })));
 });
 
-function _startEnrichment(playlistResult, tabId) {
-  if (!playlistResult.entries?.length || !playlistResult.enriching) return;
-
-  const id = playlistResult.playlistId || playlistResult.title;
-  if (!id) return;
-
-  // Cancel any stale enrichment for the same playlist
-  if (activeEnrichments.has(id)) activeEnrichments.get(id).cancel();
-
-  // Dynamically require to avoid circular deps at module load time
-  const { startPlaylistEnrichment } = require('../playlist-worker');
-  const cookieFile = getCookiesFilePath?.() || null;
-
-  const handle = startPlaylistEnrichment(id, tabId, playlistResult.entries, cookieFile);
-  activeEnrichments.set(id, handle);
-
-  // Auto-cleanup after 30 minutes regardless
-  setTimeout(() => { activeEnrichments.delete(id); }, 30 * 60 * 1000);
-}
 
 module.exports = router;

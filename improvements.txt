@@ -1,0 +1,3 @@
+insted of using insta username as {uername}_postid for reels use name of insta page, not username
+and display name of cahnnel in queue while dowlaodign insted of instagram reel, or just put symbol as video,photo serperate
+if reel/photo alrady downloaded point the open folder/open file to its location isted instd it showing no oprn folder or openfile 
