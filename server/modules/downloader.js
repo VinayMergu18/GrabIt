@@ -111,13 +111,24 @@ async function convertWebpToJpg(filePath, item, downloadId) {
     const ffmpegBin = getFfmpegBin();
     const args = ['-y', '-i', filePath, jpgPath];
 
-    log.cmd('convertWebpToJpg', ffmpegBin, args);
+    // log.cmd('convertWebpToJpg', ffmpegBin, args);
+
+    log.info(
+  'convertWebpToJpg',
+  `Converting ${path.basename(filePath)}`
+);
+
     await spawnProcess(ffmpegBin, args, downloadId, item, () => null);
 
     // Verify the conversion worked
-    if (fs.existsSync(jpgPath)) {
-      // Remove the original WebP file
-      fs.unlinkSync(filePath);
+if (fs.existsSync(jpgPath)) {
+  // Remove the original WebP file
+  fs.unlinkSync(filePath);
+
+  log.ok(
+    'convertWebpToJpg',
+    `Converted ${path.basename(filePath)}`
+  );
 
       // Update tempFiles tracking if we're tracking this item
       if (item && item.tempFiles) {
@@ -160,8 +171,16 @@ function parseYtDlpLine(line) {
 
 function spawnProcess(bin, args, downloadId, item, parseLine) {
   const FN = `spawnProcess[${path.basename(bin)}]`;
-  log.cmd(FN, bin, args);
-  log.download(FN, 'started', { downloadId, bin: path.basename(bin), title: item?.title?.slice(0,80) });
+  const isFFmpeg = path.basename(bin).toLowerCase().startsWith('ffmpeg');
+
+  if (!isFFmpeg) {
+    log.cmd(FN, bin, args);
+    log.download(FN, 'started', {
+      downloadId,
+      bin: path.basename(bin),
+      title: item?.title?.slice(0, 80)
+    });
+  }
 
   return new Promise((resolve, reject) => {
     const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -173,8 +192,13 @@ function spawnProcess(bin, args, downloadId, item, parseLine) {
     let stdout = '', stderr = '', lastPct = -1;
     const files = [];
 
-    const onLine = (line) => {
-      if (line.trim()) log.debug(FN, 'stdout', { downloadId, line: line.trim().slice(0, 300) });
+const onLine = (line) => {
+  if (line.trim() && !isFFmpeg) {
+    log.debug(FN, 'stdout', {
+      downloadId,
+      line: line.trim().slice(0, 300)
+    });
+  }
       if (item?.cancelled) { try { proc.kill('SIGTERM'); } catch {} return; }
 
       // Capture output filenames
@@ -236,13 +260,7 @@ function spawnProcess(bin, args, downloadId, item, parseLine) {
                   if (match) {
                       f = path.join(dir, match);
                   }
-              } catch (err) {
-                  log.warn(FN, "Failed to resolve already-downloaded filename", {
-                      error: err.message,
-                      directory: dir,
-                      fileId: id
-                  });
-              }
+              } catch {}
           }
 
           if (!files.includes(f)) {
@@ -278,14 +296,23 @@ function spawnProcess(bin, args, downloadId, item, parseLine) {
       const lines = outBuf.split('\n'); outBuf = lines.pop();
       lines.forEach(onLine);
     });
-    proc.stderr.on('data', chunk => {
-      stderr += chunk; errBuf += chunk;
-      const lines = errBuf.split('\n'); errBuf = lines.pop();
-      lines.forEach(line => {
-        if (line.trim()) log.warn(FN, 'stderr', { downloadId, line: line.trim().slice(0, 300) });
-        onLine(line);
+  proc.stderr.on('data', chunk => {
+  stderr += chunk;
+  errBuf += chunk;
+  const lines = errBuf.split('\n');
+  errBuf = lines.pop();
+
+  lines.forEach(line => {
+    if (line.trim() && !isFFmpeg) {
+      log.warn(FN, 'stderr', {
+        downloadId,
+        line: line.trim().slice(0, 300)
       });
-    });
+    }
+
+    onLine(line);
+  });
+});
 
     proc.on('close', code => {
       if (item) item.proc = null;
@@ -304,7 +331,16 @@ function spawnProcess(bin, args, downloadId, item, parseLine) {
         });
         return reject(new Error(`${path.basename(bin)} exited ${code}: ${errTail}`));
       }
-      log.download(FN, 'complete', { downloadId, exitCode: code, files, stdoutBytes: stdout.length, stderrBytes: stderr.length });
+      // log.download(FN, 'complete', { downloadId, exitCode: code, files, stdoutBytes: stdout.length, stderrBytes: stderr.length });
+        if (!isFFmpeg) {
+  log.download(FN, 'complete', {
+    downloadId,
+    exitCode: code,
+    files,
+    stdoutBytes: stdout.length,
+    stderrBytes: stderr.length
+  });
+}
       resolve({ success: true, file: files[files.length - 1] || null, files, stdout, stderr });
     });
 
@@ -325,8 +361,20 @@ function runGalleryDl(args, downloadId, item, outputDir = null) {
   const bin = getGalleryDlBin();
 
   // Log the exact command — this was previously invisible in the logs
+  // log.cmd(FN, bin, args);
+  // log.download(FN, 'started', { downloadId, title: item?.title?.slice(0, 80) });
+  ///////////////////////////////////////////////////////////////////////////////////////
+      const isFFmpeg = path.basename(bin).toLowerCase().startsWith('ffmpeg');
+      if (!isFFmpeg) {
   log.cmd(FN, bin, args);
-  log.download(FN, 'started', { downloadId, title: item?.title?.slice(0, 80) });
+  log.download(FN, 'started', {
+    downloadId,
+    bin: path.basename(bin),
+    title: item?.title?.slice(0,80)
+  });
+}
+
+  //////////////////////////////////////////////////////////////////////////////////////////
 
   return new Promise((resolve, reject) => {
     const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -396,22 +444,12 @@ function runGalleryDl(args, downloadId, item, outputDir = null) {
         log.error(FN, `gallery-dl fatal exit (code 2)`, { downloadId, stderr: msg.slice(0, 1000) });
         return reject(new Error(`gallery-dl failed: ${msg}`));
       }
-
-      // If gallery-dl produced no stdout file paths (e.g. all files were skipped
-      // because they already exist), scan the output directory to populate the
-      // files list so the queue item always has file/folder metadata.
-      if (files.length === 0 && outputDir && fs.existsSync(outputDir)) {
-        const MEDIA = /\.(jpg|jpeg|png|webp|mp4|mov|gif|heic|avif|m4v|mkv|ts|mp3|m4a|aac|wav|opus|flac)$/i;
-        const found = fs.readdirSync(outputDir)
-          .filter(f => MEDIA.test(f) && !f.startsWith('.'))
-          .map(f => path.join(outputDir, f))
-          .sort();
-        if (found.length) {
-          files.push(...found);
-          log.info(FN, `No new downloads — found ${found.length} existing file(s) in output dir`, { outputDir, files: found.map(f => path.basename(f)) });
-        } else {
-          log.warn(FN, 'No files downloaded and output dir is empty', { downloadId, outputDir, exitCode: code });
-        }
+      // If gallery-dl didn't download anything new, don't scan the entire folder.
+      if (files.length === 0) {
+        log.info(FN, 'No new files downloaded', {
+          downloadId,
+          exitCode: code
+        });
       }
 
       if (downloadId) bp(downloadId, { percent: 100, speed: null, eta: null });
@@ -634,61 +672,107 @@ async function downloadInstagramPhoto(url, options = {}, downloadId, item) {
   try {
     const result = await runGalleryDl(args, downloadId, item, folder);
     // Convert any WebP images to JPG and rename files
+    // if (Array.isArray(result.files) && result.files.length) {
+    //   const processed = await Promise.all(
+    //     result.files.map(async (filePath, index) => {
+    //       const ext = path.extname(filePath).toLowerCase();
+    //       const dir = path.dirname(filePath);
+
+    //       // Convert WebP to JPG if needed
+    //       let processedPath = filePath;
+    //       if (ext === '.webp') {
+    //         processedPath = await convertWebpToJpg(filePath, item, downloadId);
+    //         // Update extension after conversion
+    //         if (processedPath !== filePath) {
+    //           const newExt = path.extname(processedPath).toLowerCase();
+    //           // Update tempFiles tracking if we changed extensions
+    //           if (item && item.tempFiles) {
+    //             const oldIndex = item.tempFiles.indexOf(filePath);
+    //             if (oldIndex > -1) {
+    //               item.tempFiles.splice(oldIndex, 1);
+    //             }
+    //             item.tempFiles.push(processedPath);
+    //           }
+    //         }
+    //       }
+
+    //       // Rename file to use mediaId
+    //       const newName = `${mediaId}_${String(index + 1).padStart(2, '0')}${path.extname(processedPath)}`;
+    //       const newPath = path.join(dir, newName);
+    //       try {
+    //         // Check if target file already exists to prevent overwriting
+    //         if (fs.existsSync(newPath)) {
+    //           fs.unlinkSync(newPath);
+    //         }
+    //         fs.renameSync(processedPath, newPath);
+
+    //         // Update tempFiles tracking
+    //         if (item && item.tempFiles) {
+    //           const oldIndex = item.tempFiles.indexOf(processedPath);
+    //           if (oldIndex > -1) {
+    //             item.tempFiles.splice(oldIndex, 1);
+    //           }
+    //           item.tempFiles.push(newPath);
+    //         }
+
+    //         return newPath;
+    //       } catch (renameErr) {
+    //         log.warn('downloadInstagramPhoto', `Failed to rename ${processedPath} to ${newPath}`, { error: renameErr.message });
+    //         // If rename fails, return the processed path (converted WebP or original)
+    //         return processedPath;
+    //       }
+    //     })
+    //   );
+
+    //   result.files = processed;
+    //   result.file = result.files[result.files.length - 1] || null;
+    // }
+
+    ///////////////////////////////////////
     if (Array.isArray(result.files) && result.files.length) {
-      const processed = await Promise.all(
-        result.files.map(async (filePath, index) => {
-          const ext = path.extname(filePath).toLowerCase();
-          const dir = path.dirname(filePath);
+  let filePath = result.files[0];
 
-          // Convert WebP to JPG if needed
-          let processedPath = filePath;
-          if (ext === '.webp') {
-            processedPath = await convertWebpToJpg(filePath, item, downloadId);
-            // Update extension after conversion
-            if (processedPath !== filePath) {
-              const newExt = path.extname(processedPath).toLowerCase();
-              // Update tempFiles tracking if we changed extensions
-              if (item && item.tempFiles) {
-                const oldIndex = item.tempFiles.indexOf(filePath);
-                if (oldIndex > -1) {
-                  item.tempFiles.splice(oldIndex, 1);
-                }
-                item.tempFiles.push(processedPath);
-              }
-            }
-          }
+  // Convert WebP to JPG if needed
+  if (path.extname(filePath).toLowerCase() === '.webp') {
+    filePath = await convertWebpToJpg(filePath, item, downloadId);
+  }
 
-          // Rename file to use mediaId
-          const newName = `${mediaId}_${String(index + 1).padStart(2, '0')}${path.extname(processedPath)}`;
-          const newPath = path.join(dir, newName);
-          try {
-            // Check if target file already exists to prevent overwriting
-            if (fs.existsSync(newPath)) {
-              fs.unlinkSync(newPath);
-            }
-            fs.renameSync(processedPath, newPath);
+  const dir = path.dirname(filePath);
+  const newPath = path.join(
+    dir,
+    `${mediaId}_01${path.extname(filePath)}`
+  );
 
-            // Update tempFiles tracking
-            if (item && item.tempFiles) {
-              const oldIndex = item.tempFiles.indexOf(processedPath);
-              if (oldIndex > -1) {
-                item.tempFiles.splice(oldIndex, 1);
-              }
-              item.tempFiles.push(newPath);
-            }
-
-            return newPath;
-          } catch (renameErr) {
-            log.warn('downloadInstagramPhoto', `Failed to rename ${processedPath} to ${newPath}`, { error: renameErr.message });
-            // If rename fails, return the processed path (converted WebP or original)
-            return processedPath;
-          }
-        })
-      );
-
-      result.files = processed;
-      result.file = result.files[result.files.length - 1] || null;
+  try {
+    if (fs.existsSync(newPath)) {
+      fs.unlinkSync(newPath);
     }
+
+    fs.renameSync(filePath, newPath);
+
+    if (item && item.tempFiles) {
+      const oldIndex = item.tempFiles.indexOf(filePath);
+      if (oldIndex > -1) {
+        item.tempFiles.splice(oldIndex, 1);
+      }
+      item.tempFiles.push(newPath);
+    }
+
+    result.files = [newPath];
+    result.file = newPath;
+
+  } catch (renameErr) {
+    log.warn(
+      'downloadInstagramPhoto',
+      `Failed to rename ${filePath} to ${newPath}`,
+      { error: renameErr.message }
+    );
+
+    result.files = [filePath];
+    result.file = filePath;
+  }
+}
+    ///////////////////////////////////////
     return result;
   } catch (err) {
     log.error('downloadInstagramPhoto', `gallery-dl failed for photo ${url}`, {
@@ -884,54 +968,64 @@ async function downloadInstagramCarouselAll(url, options = {}, downloadId, item)
   }
   // Convert any WebP images to JPG
   if (Array.isArray(result.files) && result.files.length) {
-    const converted = await Promise.all(
-      result.files.map(async (filePath, index) => {
-        const ext = path.extname(filePath).toLowerCase();
-        if (ext === '.webp') {
-          const jpgPath = await convertWebpToJpg(filePath, item, downloadId);
-          // If conversion succeeded, we'll rename it below; if not, keep original
-          return jpgPath;
-        }
-        return filePath;
-      })
-    );
+        const converted = [];
+
+    for (const filePath of result.files) {
+      const ext = path.extname(filePath).toLowerCase();
+
+      if (ext === '.webp') {
+        converted.push(await convertWebpToJpg(filePath, item, downloadId));
+      } else {
+        converted.push(filePath);
+      }
+    }
+
     result.files = converted;
 
-    // Rename files to use our mediaId and proper sequence numbers
-    const renamed = await Promise.all(
-      result.files.map(async (filePath, index) => {
-        const ext = path.extname(filePath);
-        const dir = path.dirname(filePath);
-        const newName = `${mediaId}_${String(index + 1).padStart(2, '0')}${ext}`;
-        const newPath = path.join(dir, newName);
-        try {
-          // Check if target file already exists to prevent overwriting
-          if (fs.existsSync(newPath)) {
-            fs.unlinkSync(newPath);
-          }
-          fs.renameSync(filePath, newPath);
-          // Update tempFiles tracking
-          if (item && item.tempFiles) {
-            const oldIndex = item.tempFiles.indexOf(filePath);
-            if (oldIndex > -1) {
-              item.tempFiles.splice(oldIndex, 1);
-            }
-            item.tempFiles.push(newPath);
-          }
-          return newPath;
-        } catch (renameErr) {
-          log.warn('downloadInstagramCarouselAll', `Failed to rename ${filePath} to ${newPath}`, { error: renameErr.message });
-          // If rename fails, keep original file
-          return filePath;
+    const renamed = [];
+
+    for (let index = 0; index < result.files.length; index++) {
+      const filePath = result.files[index];
+      const ext = path.extname(filePath);
+      const dir = path.dirname(filePath);
+
+      const newName = `${mediaId}_${String(index + 1).padStart(2, '0')}${ext}`;
+      const newPath = path.join(dir, newName);
+
+      try {
+        if (fs.existsSync(newPath)) {
+          fs.unlinkSync(newPath);
         }
-      })
-    );
+
+        fs.renameSync(filePath, newPath);
+
+        if (item && item.tempFiles) {
+          const oldIndex = item.tempFiles.indexOf(filePath);
+          if (oldIndex > -1) {
+            item.tempFiles.splice(oldIndex, 1);
+          }
+          item.tempFiles.push(newPath);
+        }
+
+        renamed.push(newPath);
+
+      } catch (renameErr) {
+        log.warn(
+          'downloadInstagramCarouselAll',
+          `Failed to rename ${filePath} to ${newPath}`,
+          { error: renameErr.message }
+        );
+
+        renamed.push(filePath);
+      }
+    }
+
     result.files = renamed;
-    result.file = result.files[result.files.length - 1] || null;
+    result.file = renamed[renamed.length - 1] || null;
   }
   // Metadata file creation DISABLED per user request
   // Original code removed to prevent metadata.json generation
-  //Remove Commented Code if you want metadat.json file
+  //Remove Commented Code if you want metadata.json file
     /*
   try {
     let metadataName = 'metadata.json';
