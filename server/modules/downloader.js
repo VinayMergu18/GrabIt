@@ -216,19 +216,43 @@ function spawnProcess(bin, args, downloadId, item, parseLine) {
           log.warn('spawnProcess', 'Failed to update playlist counters', { error: e.message });
         }
       }
+      
       const alreadyMatch = line.match(/\[download\]\s+(.+?)\s+has already been downloaded/i);
 
-if (alreadyMatch) {
-    const f = alreadyMatch[1].trim();
+      if (alreadyMatch) {
+          let f = alreadyMatch[1].trim();
 
-    if (!files.includes(f)) {
-        files.push(f);
-    }
+          // If the reported file doesn't exist, try finding the real file
+          if (!fs.existsSync(f)) {
+              const dir = path.dirname(f);
+              const ext = path.extname(f);
+              const id = path.basename(f, ext).split('_').pop();
 
-    if (item && !item.tempFiles.includes(f)) {
-        item.tempFiles.push(f);
-    }
-}
+              try {
+                  const match = fs.readdirSync(dir).find(name =>
+                      name.endsWith(`_${id}${ext}`)
+                  );
+
+                  if (match) {
+                      f = path.join(dir, match);
+                  }
+              } catch (err) {
+                  log.warn(FN, "Failed to resolve already-downloaded filename", {
+                      error: err.message,
+                      directory: dir,
+                      fileId: id
+                  });
+              }
+          }
+
+          if (!files.includes(f)) {
+              files.push(f);
+          }
+
+          if (item && !item.tempFiles.includes(f)) {
+              item.tempFiles.push(f);
+          }
+      }
       const mergeMatch = line.match(/Merging formats into "(.+)"/);
       if (mergeMatch) files.push(mergeMatch[1].trim());
       const audioMatch = line.match(/\[ExtractAudio\].*Destination:\s*(.+)$/);

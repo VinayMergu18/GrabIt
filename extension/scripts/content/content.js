@@ -97,10 +97,26 @@
     lastSlideIndex = slideIndex;
     lastUrl = url;
 
+try {
     chrome.runtime.sendMessage({
-      type: 'SLIDE_UPDATE',
-      data: { url, slideIndex, slideCount, mediaType, platform }
-    }).catch(() => {});
+        type: "SLIDE_UPDATE",
+        data: {
+            url,
+            slideIndex,
+            slideCount,
+            mediaType,
+            platform
+        }
+    }, (response) => {
+        console.log("Callback");
+        console.log(chrome.runtime.lastError);
+    });
+} catch (e) {
+    console.error("Caught:", e);
+}
+
+console.log("After sendMessage");
+
   }
 
   // ── Observers ─────────────────────────────────────────────────────────────────
