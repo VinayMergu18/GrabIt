@@ -53,6 +53,7 @@ const AUDIO_FMTS   = ['mp3', 'm4a', 'aac', 'opus', 'flac', 'wav', 'ogg'];
  * @param {string}   cookieFile  Path to cookies file (may be null)
  * @returns {{ cancel: () => void }} control handle
  */
+
 function startPlaylistEnrichment(playlistId, tabId, entries, cookieFile) {
   let cancelled = false;
   const cancel  = () => { cancelled = true; };
@@ -66,6 +67,10 @@ function startPlaylistEnrichment(playlistId, tabId, entries, cookieFile) {
   const subtitleTotals = Object.fromEntries(TIER_HEIGHTS.map(h => [h, 0])); // subtitle overhead per tier
   const audioTotals = Object.fromEntries(AUDIO_FMTS.map(f => [f, 0]));
   const totalDuration = { value: 0 };
+
+// console.log('entries:', entries);
+// console.log('Array?', Array.isArray(entries));
+// console.log('type:', typeof entries);
 
   let completed = 0;
   let skipped   = 0;
@@ -90,13 +95,21 @@ function startPlaylistEnrichment(playlistId, tabId, entries, cookieFile) {
 
         videoCache.set(videoId, meta);
         formats = buildFullFormatsFromMeta(meta);
+
+formats = buildFullFormatsFromMeta(meta);
+
+formatCache.set(videoId, formats);
+
+totalDuration.value += meta.duration || 0;
+
+
         formatCache.set(videoId, formats);
 
         totalDuration.value += meta.duration || 0;
       }
 
       // Accumulate video + subtitle sizes per tier
-      const subtitleOffset = formats.subtitleInfo.subOverheadBytes || 0;
+      const subtitleOffset = formats.subtitleInfo.subOverheadBytes || 0; 
       for (const tier of TIER_HEIGHTS) {
         const videoFormats = formats.videoFormats;
         const best = videoFormats
@@ -105,13 +118,11 @@ function startPlaylistEnrichment(playlistId, tabId, entries, cookieFile) {
         const size = best ? best.size : 0;
         videoTotals[tier] += size + subtitleOffset;
       }
-
       // Accumulate audio format sizes
       for (const fmt of AUDIO_FMTS) {
         const match = formats.audioFormats.find(f => f.fmt === fmt);
         if (match?.size) audioTotals[fmt] += match.size;
       }
-
       completed++;
     } catch {
       skipped++;
@@ -162,7 +173,6 @@ async function _probeVideo(url, cookieFile) {
     ...cookies,
     url
   ];
-
   let stdout;
   try {
     ({ stdout } = await execFileAsync(ytdlp, args, { timeout: EXEC_TIMEOUT, maxBuffer: EXEC_BUFFER }));
@@ -177,6 +187,7 @@ async function _probeVideo(url, cookieFile) {
       if (obj?.id) return obj;
     } catch {}
   }
+  console.log("[Probe] No JSON:", url);
   return null;
 }
 

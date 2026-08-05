@@ -499,7 +499,9 @@ async function downloadYouTubeVideo(url, options = {}, downloadId, item) {
     '--ffmpeg-location', getFfmpegBin(),
     '--output', path.join(folder, '%(title)s [%(id)s].%(ext)s'),
     '--no-playlist',
-    '--add-metadata', '--write-thumbnail',
+    '--convert-thumbnails', 'jpg', 
+    '--embed-thumbnail',
+    '--add-metadata', 
     '--progress', '--newline', '--no-warnings',
     url
   ];
@@ -513,7 +515,8 @@ async function downloadYouTubeVideo(url, options = {}, downloadId, item) {
 async function downloadYouTubeVideoWithSubs(url, options = {}, downloadId, item) {
   const settings = getSettings().youtube || {};
   const ytBase = ytRootBase(options, settings);
-  const titleFolder = ensureFolder(path.join(ytBase, 'Videos'));
+  // const titleFolder = ensureFolder(path.join(ytBase, 'Videos'));
+  const folder = ensureFolder(path.join(ytBase, 'Videos'));
   const quality  = options.quality || 'recommended';
   const subsOnly = options.subsOnly || false;
   const subLang  = options.subLang  || settings.autoSubtitleLang || 'en,en-US,en-GB';
@@ -603,7 +606,9 @@ async function downloadYouTubePlaylist(url, options = {}, downloadId, item) {
       '--format', fmtStr,
       '--merge-output-format', subtitles ? 'mkv' : 'mp4',
       '--ffmpeg-location', getFfmpegBin(),
-      '--add-metadata', '--write-thumbnail',
+      '--convert-thumbnails', 'jpg',
+      '--embed-thumbnail',
+      '--add-metadata',
       '--output', path.join(folder, '%(playlist_index)s - %(title)s [%(id)s].%(ext)s'),
       '--yes-playlist', '--match-filter', matchFilter,
       '--progress', '--newline', '--no-warnings', '--ignore-errors', url

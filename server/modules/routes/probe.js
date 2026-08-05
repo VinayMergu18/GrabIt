@@ -41,7 +41,13 @@ function _startEnrichment(playlistResult, tabId, scanId) {
   const { startPlaylistEnrichment } = require('../playlist-worker');
   const cookieFile = getCookiesFilePath?.() || null;
 
-  const handle = startPlaylistEnrichment(scanId, playlistResult.playlistId, tabId, playlistResult.entries, cookieFile);
+  // const handle = startPlaylistEnrichment(scanId, playlistResult.playlistId, tabId, playlistResult.entries, cookieFile);
+  const handle = startPlaylistEnrichment(
+  playlistResult.playlistId,
+  tabId,
+  playlistResult.entries,
+  cookieFile
+);
   activeEnrichments.set(scanId, handle);
 
   // Auto-cleanup after 30 minutes regardless of whether the scan completes
