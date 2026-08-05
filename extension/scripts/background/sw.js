@@ -149,8 +149,62 @@ function addStream(tabId, url, pageTitle, headers = []) {
 
 function normalizeHeaders(headers) {
   const allow = new Set(['accept', 'accept-language', 'authorization', 'cookie', 'origin', 'referer', 'user-agent']);
-  return (headers || []).filter(h => h?.name && h.value && allow.has(h.name.toLowerCase()))
+  return (headers || []).map(h => Array.isArray(h) ? { name: h[0], value: h[1] } : h)
+    .filter(h => h?.name && h.value && allow.has(h.name.toLowerCase()))
     .map(h => [h.name, h.value]);
+}
+
+// The bundled site detectors are derived from VDown and send their already
+// parsed `on_media` object through this small serde format. Consume it directly:
+// it is more accurate than trying to infer a master playlist from a media
+// rendition request.
+function vdownDeserialize(value) {
+  if (!value || typeof value !== 'object' || !value.__serde_tag) return value;
+  const data = value.__serde_val;
+  switch (value.__serde_tag) {
+    case 'primitive': return data;
+    case 'url': return data;
+    case 'headers': return data || [];
+    case 'array': return (data || []).map(vdownDeserialize);
+    case 'some': return vdownDeserialize(data);
+    case 'none': return null;
+    case 'object': return Object.fromEntries(Object.entries(data || {}).map(([key, item]) => [key, vdownDeserialize(item)]));
+    case 'map': return new Map((data || []).map(([key, item]) => [vdownDeserialize(key), vdownDeserialize(item)]));
+    default: return null;
+  }
+}
+
+function optionValue(value) { return value?.__serde_tag ? vdownDeserialize(value) : value; }
+
+function addDetectorMedia(tabId, rawMedia, pageTitle) {
+  const media = vdownDeserialize(rawMedia);
+  if (!media || !['m3u8_playlist', 'mpd_playlist'].includes(media.type) || !media.master_url) return false;
+  const url = optionValue(media.master_url);
+  if (!url) return false;
+  if (!tabStreams.has(tabId)) tabStreams.set(tabId, new Map());
+  const map = tabStreams.get(tabId);
+  const playlist = optionValue(media.playlist) || [];
+  const variants = playlist.map((entry, index) => {
+    const quality = optionValue(entry.quality) || {};
+    const size = optionValue(quality.size) || {};
+    const av = optionValue(entry.av) || {};
+    return {
+      id: `${media.type}-${index}`, protocol: media.type === 'mpd_playlist' ? 'dash' : 'hls',
+      workerEntry: Number.isFinite(entry.index) ? entry.index : index,
+      url: optionValue(av.video) || url, audioUrl: optionValue(av.audio) || null,
+      width: Number(size.width || 0), height: Number(size.height || 0), bitrate: Number(optionValue(quality.bitrate) || 0),
+      codecs: '', container: optionValue(entry.demuxer) || 'mp4'
+    };
+  }).sort((a, b) => b.height - a.height || b.bitrate - a.bitrate);
+  const existing = map.get(url);
+  map.set(url, {
+    url, type: media.type === 'mpd_playlist' ? 'DASH' : 'HLS', name: optionValue(media.title) || pageTitle || urlName(url),
+    quality: null, headers: normalizeHeaders(optionValue(media.sent_headers)), variants, parsing: false, ts: Date.now(),
+    manifestError: variants.length ? null : 'The site exposed no downloadable variants.'
+  });
+  updateBadge(tabId, map.size);
+  chrome.runtime.sendMessage({ type: 'streams_updated', tabId }).catch(() => {});
+  return !existing;
 }
 
 function attributes(line) {
@@ -218,8 +272,18 @@ async function enrichManifest(tabId, stream) {
     // A media playlist is a valid single-quality HLS source.
     stream.variants = variants.length ? variants.sort((a, b) => b.height - a.height || b.bitrate - a.bitrate) :
       stream.type === 'HLS' ? [{ id: 'hls-source', protocol: 'hls', url: stream.url, width: 0, height: 0, bitrate: 0, codecs: '', container: 'mp4' }] : [];
-  } catch (error) { stream.manifestError = error.message; stream.variants = []; }
-  finally { stream.parsing = false; chrome.runtime.sendMessage({ type: 'streams_updated', tabId }).catch(() => {}); }
+  } catch (error) {
+    stream.manifestError = error.message;
+    // If we cannot fetch the manifest, assume it's a media playlist and use it as a single variant (for HLS only)
+    if (stream.type === 'HLS') {
+      stream.variants = [{ id: 'hls-source', protocol: 'hls', url: stream.url, width: 0, height: 0, bitrate: 0, codecs: '', container: 'mp4' }];
+    } else {
+      stream.variants = [];
+    }
+  } finally {
+    stream.parsing = false;
+    chrome.runtime.sendMessage({ type: 'streams_updated', tabId }).catch(() => {});
+  }
 }
 
 function updateBadge(tabId, count) {
@@ -299,7 +363,9 @@ async function extractAndSendCookies(tabId, url) {
     lastCookieExtraction.set(tabId, now);
 
   } catch (error) {
-    console.error(`[AutoCookies] Failed to reach local server: ${error.message}`);
+    // The media Stream tab is fully offline. Keep the legacy YT/Instagram
+    // cookie relay quiet when the optional local server is not running.
+    console.debug(`[AutoCookies] Optional local server unavailable: ${error.message}`);
   }
 }
 
@@ -606,6 +672,18 @@ async function offlineStreamDownload(tabId, streamUrl, variantId) {
 
 // ── Message router ────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+
+  // VDown-compatible dedicated detectors (Vimeo, VK, Bilibili, etc.).
+  // Their parsed manifests contain the real rendition list, including URLs that
+  // may never appear as a browser network request.
+  if (msg?.channel === 0 && msg?.msg?.name === 'on_media') {
+    const tabId = sender.tab?.id;
+    if (tabId != null) {
+      addDetectorMedia(tabId, msg.msg.data?.media, sender.tab?.title || '');
+      sendResponse({ ok: true });
+    }
+    return true;
+  }
 
   // Popup asking for all detected streams on the active tab
   if (msg.type === 'GET_STREAMS') {
