@@ -16,8 +16,7 @@
                 type: 'STREAM_DETECTED',
                 url: url,
                 pageTitle: pageTitle || document.title,
-                quality: null, // will be guessed by background
-                type: null     // will be classified by background
+                quality: null // will be guessed by background
             });
         } catch (e) {
             // Ignore errors when extension context is invalidated (e.g., during extension reload)

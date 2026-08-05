@@ -422,6 +422,11 @@ function handleWSMessage(msg) {
   if (msg.type === 'streams_updated') {
     if (state.activeTab === 'streams') loadStreams();
   }
+  if (msg.type === 'stream_download_progress' && state.activeTab === 'streams') {
+    const p = msg.progress || {};
+    if (p.phase === 'downloading' && p.total) toast(`Downloading segment ${p.completed}/${p.total}`);
+    if (p.phase === 'complete') toast('Browser download started', 'success');
+  }
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
@@ -1124,27 +1129,18 @@ function renderStreams(container, streams) {
   }
   container.innerHTML = html;
 
-  // Bind download buttons
+  // Stream-tab downloads stay inside the extension; they never use the local server.
   container.querySelectorAll('.download-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const url   = btn.dataset.url;
-      const type  = btn.dataset.type;
-      const name  = btn.dataset.name;
       const select = document.getElementById(`quality-select-${btn.dataset.idx}`);
-      const quality = select ? select.value : '';
-
-      // Get cookies for the URL
-      const cookies = await getCookiesForUrl(url);
-
-      startDownload({
-        url,
-        action:   'download_stream',
-        platform: 'generic',
-        title:    name,
-        options:  { streamType: type, name, quality: quality, cookies: cookies }
-      });
       btn.textContent = '⏳';
       btn.disabled    = true;
+      chrome.runtime.sendMessage({ type: 'DOWNLOAD_STREAM_OFFLINE', streamUrl: btn.dataset.url, variantId: select?.value || '' }, (result) => {
+        if (chrome.runtime.lastError || !result?.ok) {
+          toast(result?.error || chrome.runtime.lastError?.message || 'Offline download failed', 'error');
+          btn.textContent = '⬇ Download'; btn.disabled = false;
+        } else { btn.textContent = '✓ Added'; toast('Downloading in browser', 'success'); }
+      });
     });
   });
 }
@@ -1159,35 +1155,19 @@ function streamRow(s, idx) {
     if (display.length > 60) display = display.slice(0, 57) + '…';
   } catch {}
 
-  const qualBadge = s.quality
-    ? `<span style="font-size:10px;background:var(--surface2);border-radius:3px;padding:1px 5px;margin-left:4px">${s.quality}</span>` : '';
+  const qualBadge = s.quality ? `<span style="font-size:10px;background:var(--surface2);border-radius:3px;padding:1px 5px;margin-left:4px">${s.quality}</span>` : '';
 
   const time = s.ts ? new Date(s.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
 
-  // Determine the list of qualities to show in the dropdown
-  let qualityList;
-  if (s.qualities && Array.isArray(s.qualities) && s.qualities.length > 0) {
-    qualityList = s.qualities;
-  } else {
-    qualityList = ['Best','4K','1440p','1080p','720p','480p','360p','240p','144p','High','Medium','Low'];
-  }
-
-  const optionsHTML = qualityList.map(q => {
-    const value = q === 'Best' ? '' : q;
-    // Determine selected option:
-    // 1. If we have specific qualities from detector, select the first (highest) one
-    // 2. Else if we have a guessed quality that guessed quality, use it
-    // 3. Else default to 'Best'
-    let selected = false;
-    if (s.qualities && s.qualities.length > 0) {
-      selected = (q === s.qualities[0]); // First (highest) quality from detector
-    } else if (s.quality && qualityList.includes(s.quality)) {
-      selected = (s.quality === q);
-    } else {
-      selected = (q === 'Best');
-    }
-    return `<option value="${value}" ${selected}>${q}</option>`;
+  const variants = Array.isArray(s.variants) && s.variants.length ? s.variants : [{ id: '', width: 0, height: 0, bitrate: 0, codecs: '', container: s.type }];
+  const optionsHTML = variants.map((v, i) => {
+    const resolution = v.height ? `${v.height}p (${v.width}×${v.height})` : (s.quality || 'Source');
+    const bitrate = v.bitrate ? ` · ${(v.bitrate / 1000000).toFixed(v.bitrate >= 10000000 ? 0 : 1)} Mbps` : '';
+    const codecs = v.codecs ? ` · ${v.codecs}` : '';
+    return `<option value="${escHtml(v.id)}" ${i === 0 ? 'selected' : ''}>${resolution}${bitrate}${codecs}</option>`;
   }).join('');
+  const parsing = s.parsing ? '<span style="font-size:10px;color:var(--text3)">Reading manifest…</span>' : '';
+  const error = s.manifestError ? `<span style="font-size:10px;color:var(--red)">${escHtml(s.manifestError)}</span>` : '';
 
   return `<div class="yt-quality-row" style="flex-direction:column;align-items:flex-start;gap:3px;cursor:default;padding:8px 10px">
     <div style="display:flex;align-items:center;gap:6px;width:100%">
@@ -1197,11 +1177,12 @@ function streamRow(s, idx) {
         ${optionsHTML}
       </select>
       <button class="btn btn-primary download-btn" style="font-size:11px;padding:3px 10px;white-space:nowrap"
-        data-url="${escHtml(s.url)}" data-type="${s.type}" data-name="${escHtml(s.name)}" data-idx="${idx}">
+        data-url="${escHtml(s.url)}" data-idx="${idx}" ${s.parsing ? 'disabled' : ''}>
         ⬇ Download
       </button>
     </div>
     <div style="font-size:10px;color:var(--text3);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width=100%" title="${escHtml(s.url)}">${escHtml(display)}</div>
+    ${parsing}${error}
     ${time ? `<div style="font-size:10px;color:var(--text3)">Detected at ${time}</div>` : ''}
   </div>`;
 }

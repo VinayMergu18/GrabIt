@@ -23,6 +23,11 @@ const lastCookieExtraction = new Map(); // Track last extraction time per tabId
 // ── Stream store ──────────────────────────────────────────────────────────────
 /** @type {Map<number, Map<string, StreamInfo>>} */
 const tabStreams = new Map();
+// Request headers are needed for signed/CDN streams that reject a bare fetch.
+const requestHeaders = new Map();
+let vdownWorker = null;
+let vdownWorkerReady = null;
+const vdownWaiters = new Map();
 // ── Playlist scan progress store ────────────────────────────────────────
 /** @type {Map<number, Map<string, any>>} */
 const playlistProgressMap = new Map();
@@ -109,7 +114,7 @@ function urlName(url) {
   } catch { return 'Stream'; }
 }
 
-function addStream(tabId, url, pageTitle) {
+function addStream(tabId, url, pageTitle, headers = []) {
   if (!tabId || tabId < 0) return;
   const type = classifyUrl(url);
   if (!type) return;
@@ -123,18 +128,98 @@ function addStream(tabId, url, pageTitle) {
     return;
   }
 
-  map.set(url, {
+  const stream = {
     url,
     type,
     name:    pageTitle || urlName(url),
     quality: guessQuality(url),
+    headers: normalizeHeaders(headers),
+    variants: null,
+    parsing: false,
     ts:      Date.now(),
-  });
+  };
+  map.set(url, stream);
 
   updateBadge(tabId, map.size);
 
   // Push to popup if open
   chrome.runtime.sendMessage({ type: 'streams_updated', tabId }).catch(() => {});
+  if (type === 'HLS' || type === 'DASH') enrichManifest(tabId, stream);
+}
+
+function normalizeHeaders(headers) {
+  const allow = new Set(['accept', 'accept-language', 'authorization', 'cookie', 'origin', 'referer', 'user-agent']);
+  return (headers || []).filter(h => h?.name && h.value && allow.has(h.name.toLowerCase()))
+    .map(h => [h.name, h.value]);
+}
+
+function attributes(line) {
+  const out = {};
+  line.replace(/([A-Z0-9-]+)=((?:\"[^\"]*\")|[^,]*)/gi, (_, k, v) => { out[k] = v.replace(/^\"|\"$/g, ''); return _; });
+  return out;
+}
+
+function mimeFromCodecs(codecs = '') {
+  return /vp9|vp09|av01/i.test(codecs) ? 'webm' : 'mp4';
+}
+
+function parseHlsMaster(text, masterUrl) {
+  const lines = text.split(/\r?\n/);
+  const audioGroups = new Map();
+  for (const line of lines) {
+    if (!line.startsWith('#EXT-X-MEDIA:')) continue;
+    const a = attributes(line.slice(13));
+    if (a.TYPE === 'AUDIO' && a.GROUP-ID && a.URI && (!audioGroups.has(a.GROUP-ID) || a.DEFAULT === 'YES'))
+      audioGroups.set(a.GROUP-ID, new URL(a.URI, masterUrl).href);
+  }
+  const variants = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].startsWith('#EXT-X-STREAM-INF:')) continue;
+    const a = attributes(lines[i].slice(18));
+    const uri = lines.slice(i + 1).find(x => x.trim() && !x.startsWith('#'));
+    if (!uri) continue;
+    const [width, height] = (a.RESOLUTION || 'x').split('x').map(Number);
+    variants.push({ id: `hls-${variants.length}`, protocol: 'hls', url: new URL(uri.trim(), masterUrl).href,
+      audioUrl: audioGroups.get(a.AUDIO) || null, width: width || 0, height: height || 0,
+      bitrate: Number(a.BANDWIDTH || a['AVERAGE-BANDWIDTH'] || 0), codecs: a.CODECS || '', container: mimeFromCodecs(a.CODECS) });
+  }
+  return variants;
+}
+
+function parseDashMpd(text, masterUrl) {
+  const variants = [];
+  const attrs = s => Object.fromEntries([...s.matchAll(/([\w:-]+)=[\"']([^\"']*)[\"']/g)].map(m => [m[1], m[2]]));
+  let setIndex = 0;
+  for (const match of text.matchAll(/<AdaptationSet\b([^>]*)>([\s\S]*?)<\/AdaptationSet>/gi)) {
+    const set = attrs(match[1]), body = match[2], mime = set.mimeType || '';
+    if (!mime.startsWith('video/')) { setIndex++; continue; }
+    let index = 0;
+    for (const repMatch of body.matchAll(/<Representation\b([^>]*)(?:\/>|>([\s\S]*?)<\/Representation>)/gi)) {
+      const rep = attrs(repMatch[1]), repBody = repMatch[2] || '';
+      const base = repBody.match(/<BaseURL[^>]*>\s*([^<]+)\s*<\/BaseURL>/i)?.[1] || body.match(/<BaseURL[^>]*>\s*([^<]+)\s*<\/BaseURL>/i)?.[1];
+      variants.push({ id: `dash-${setIndex}-${index++}`, protocol: 'dash', representationId: rep.id,
+        workerEntry: variants.length,
+        url: base ? new URL(base, masterUrl).href : masterUrl, width: Number(rep.width || set.width || 0), height: Number(rep.height || set.height || 0),
+        bitrate: Number(rep.bandwidth || 0), codecs: rep.codecs || set.codecs || '', container: mime.includes('webm') ? 'webm' : 'mp4' });
+    }
+    setIndex++;
+  }
+  return variants;
+}
+
+async function enrichManifest(tabId, stream) {
+  if (stream.parsing) return;
+  stream.parsing = true;
+  try {
+    const response = await fetch(stream.url, { headers: Object.fromEntries(stream.headers), credentials: 'include' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const text = await response.text();
+    const variants = stream.type === 'HLS' ? parseHlsMaster(text, stream.url) : parseDashMpd(text, stream.url);
+    // A media playlist is a valid single-quality HLS source.
+    stream.variants = variants.length ? variants.sort((a, b) => b.height - a.height || b.bitrate - a.bitrate) :
+      stream.type === 'HLS' ? [{ id: 'hls-source', protocol: 'hls', url: stream.url, width: 0, height: 0, bitrate: 0, codecs: '', container: 'mp4' }] : [];
+  } catch (error) { stream.manifestError = error.message; stream.variants = []; }
+  finally { stream.parsing = false; chrome.runtime.sendMessage({ type: 'streams_updated', tabId }).catch(() => {}); }
 }
 
 function updateBadge(tabId, count) {
@@ -221,13 +306,17 @@ async function extractAndSendCookies(tabId, url) {
 // ── webRequest listener — network-level stream detection ──────────────────────
 // Fires for EVERY matching request across ALL tabs automatically.
 // No page injection needed; this is why webRequest is the primary method.
+chrome.webRequest.onSendHeaders.addListener(
+  (details) => { if (details.tabId >= 0) requestHeaders.set(details.requestId, details.requestHeaders || []); },
+  { urls: ['<all_urls>'], types: ['xmlhttprequest', 'media', 'other'] }, ['requestHeaders', 'extraHeaders']
+);
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     if (details.tabId < 0) return;
     // Get page title asynchronously (don't block the request)
     chrome.tabs.get(details.tabId)
-      .then(tab => addStream(details.tabId, details.url, tab?.title || ''))
-      .catch(() => addStream(details.tabId, details.url, ''));
+      .then(tab => addStream(details.tabId, details.url, tab?.title || '', requestHeaders.get(details.requestId)))
+      .catch(() => addStream(details.tabId, details.url, '', requestHeaders.get(details.requestId)));
   },
   {
     urls: [
@@ -246,6 +335,29 @@ chrome.webRequest.onBeforeRequest.addListener(
     ]
   }
 );
+
+// Many CDNs hide the extension in a signed URL. Content-Type lets those streams
+// enter the same manifest pipeline as ordinary .m3u8/.mpd URLs.
+chrome.webRequest.onHeadersReceived.addListener((details) => {
+  if (details.tabId < 0) return;
+  const contentType = (details.responseHeaders || []).find(h => h.name?.toLowerCase() === 'content-type')?.value?.toLowerCase() || '';
+  let type = null;
+  if (/mpegurl|vnd\.apple\.mpegurl/.test(contentType)) type = 'HLS';
+  else if (/dash\+xml/.test(contentType)) type = 'DASH';
+  else if (/^video\//.test(contentType)) type = 'MP4';
+  if (!type || classifyUrl(details.url)) return;
+  if (!tabStreams.has(details.tabId)) tabStreams.set(details.tabId, new Map());
+  const map = tabStreams.get(details.tabId);
+  if (map.has(details.url)) return;
+  chrome.tabs.get(details.tabId).then(tab => {
+    map.set(details.url, { url: details.url, type, name: tab?.title || urlName(details.url), quality: null,
+      headers: normalizeHeaders(requestHeaders.get(details.requestId)), variants: null, parsing: false, ts: Date.now() });
+    updateBadge(details.tabId, map.size);
+    const stream = map.get(details.url);
+    chrome.runtime.sendMessage({ type: 'streams_updated', tabId: details.tabId }).catch(() => {});
+    if (type === 'HLS' || type === 'DASH') enrichManifest(details.tabId, stream);
+  }).catch(() => {});
+}, { urls: ['<all_urls>'], types: ['xmlhttprequest', 'media', 'other'] }, ['responseHeaders', 'extraHeaders']);
 
 // ── Tab lifecycle ─────────────────────────────────────────────────────────────
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -353,6 +465,145 @@ chrome.notifications.onButtonClicked.addListener((notifId, btnIndex) => {
   chrome.runtime.sendMessage({ type: 'notification_action', id, action: btnIndex === 0 ? 'open_file' : 'open_folder' }).catch(() => {});
 });
 
+// VDown's browser-only worker is vendored separately so its large generated
+// LibAV bundle is not duplicated in this source file. It uses this exact channel.
+const vdownChannel = new BroadcastChannel('worker_service');
+vdownChannel.addEventListener('message', event => {
+  if (event.data?.channel !== 3) return;
+  const message = event.data.msg;
+  const id = message?.data?.download_id;
+  if (message?.name === 'download_progress' && id) notifyStreamProgress(null, id, message.data.progress);
+  if ((message?.name === 'download_result' || message?.name === 'download_error') && id) {
+    const waiter = vdownWaiters.get(id);
+    if (!waiter) return;
+    vdownWaiters.delete(id);
+    message.name === 'download_result' ? waiter.resolve(message.data) : waiter.reject(new Error(message.data.error || 'LibAV worker failed'));
+  }
+});
+
+function vdownSerialize(value) {
+  if (value instanceof URL) return { __serde_tag: 'url', __serde_val: value.href };
+  if (value instanceof Headers) return { __serde_tag: 'headers', __serde_val: [...value.entries()] };
+  if (Array.isArray(value)) return { __serde_tag: 'array', __serde_val: value.map(vdownSerialize) };
+  if (value === null || typeof value !== 'object') return { __serde_tag: 'primitive', __serde_val: value };
+  const output = {}; for (const [key, item] of Object.entries(value)) output[key] = vdownSerialize(item);
+  return { __serde_tag: 'object', __serde_val: output };
+}
+
+async function ensureVdownWorker() {
+  if (vdownWorkerReady) return vdownWorkerReady;
+  vdownWorkerReady = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('LibAV worker files are not installed. See scripts/stream-worker/README.md.')), 4000);
+    const ready = event => {
+      if (event.data?.channel === 3 && event.data?.msg?.name === 'is_ready_success') {
+        clearTimeout(timer); vdownChannel.removeEventListener('message', ready); resolve();
+      }
+    };
+    vdownChannel.addEventListener('message', ready);
+    try { vdownWorker = new Worker(chrome.runtime.getURL('scripts/stream-worker/main.js'), { type: 'module' }); }
+    catch (error) { clearTimeout(timer); vdownChannel.removeEventListener('message', ready); reject(error); }
+  });
+  try { return await vdownWorkerReady; } catch (error) { vdownWorkerReady = null; throw error; }
+}
+
+async function vdownDownload(args) {
+  await ensureVdownWorker();
+  return new Promise((resolve, reject) => {
+    vdownWaiters.set(args.download_id, { resolve, reject });
+    vdownChannel.postMessage({ channel: 2, msg: { name: 'download', data: { download_args: vdownSerialize(args) } } });
+  });
+}
+
+// ── Offline Stream-tab downloader ───────────────────────────────────────────
+// This deliberately never calls SERVER. Direct files and muxed HLS are assembled
+// in the extension; encrypted/adaptive A/V streams are rejected instead of being
+// silently sent to a server or producing a corrupt file.
+function safeFilename(name, extension) {
+  const base = String(name || 'video').replace(/[\\/:*?\"<>|]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 140) || 'video';
+  return `${base}.${extension}`;
+}
+
+function notifyStreamProgress(tabId, streamUrl, progress) {
+  chrome.runtime.sendMessage({ type: 'stream_download_progress', tabId, streamUrl, progress }).catch(() => {});
+}
+
+async function fetchBytes(url, headers, onProgress) {
+  const response = await fetch(url, { headers: Object.fromEntries(headers || []), credentials: 'include' });
+  if (!response.ok) throw new Error(`HTTP ${response.status} while fetching media`);
+  const reader = response.body?.getReader();
+  if (!reader) return new Uint8Array(await response.arrayBuffer());
+  const parts = []; let loaded = 0;
+  for (;;) { const { done, value } = await reader.read(); if (done) break; parts.push(value); loaded += value.byteLength; onProgress?.(loaded); }
+  const result = new Uint8Array(loaded); let offset = 0;
+  for (const part of parts) { result.set(part, offset); offset += part.byteLength; }
+  return result;
+}
+
+async function hlsBytes(playlistUrl, headers, progress) {
+  const response = await fetch(playlistUrl, { headers: Object.fromEntries(headers || []), credentials: 'include' });
+  if (!response.ok) throw new Error(`HTTP ${response.status} while fetching HLS playlist`);
+  const text = await response.text();
+  if (/^#EXT-X-KEY:.*METHOD=(?!NONE)/mi.test(text)) throw new Error('Encrypted HLS/DRM streams cannot be downloaded.');
+  const lines = text.split(/\r?\n/), urls = [];
+  let init = null;
+  for (const line of lines) {
+    const map = line.match(/^#EXT-X-MAP:.*URI=\"([^\"]+)\"/i); if (map) init = new URL(map[1], playlistUrl).href;
+    if (line.trim() && !line.startsWith('#')) urls.push(new URL(line.trim(), playlistUrl).href);
+  }
+  if (!urls.length) throw new Error('HLS media playlist contains no segments.');
+  const all = init ? [init, ...urls] : urls, parts = []; let loaded = 0;
+  for (let i = 0; i < all.length; i++) {
+    const bytes = await fetchBytes(all[i], headers); parts.push(bytes); loaded += bytes.byteLength;
+    progress({ phase: 'downloading', completed: i + 1, total: all.length, bytes: loaded });
+  }
+  const output = new Uint8Array(loaded); let offset = 0;
+  for (const part of parts) { output.set(part, offset); offset += part.byteLength; }
+  return { bytes: output, extension: init ? 'mp4' : 'ts' };
+}
+
+async function offlineStreamDownload(tabId, streamUrl, variantId) {
+  const stream = tabStreams.get(tabId)?.get(streamUrl);
+  if (!stream) throw new Error('The selected stream is no longer available. Refresh the page and try again.');
+  const variant = stream.variants?.find(v => v.id === variantId) || null;
+  const headers = stream.headers || [];
+  notifyStreamProgress(tabId, streamUrl, { phase: 'starting' });
+  let blob, extension, workerBlobUrl = null;
+  if (stream.type === 'HLS') {
+    if (!variant) throw new Error('The HLS qualities are still loading. Please try again in a moment.');
+    if (variant.audioUrl) {
+      const id = `stream_${crypto.randomUUID()}`;
+      const result = await vdownDownload({ download_id: id, headers: new Headers(headers), good_basename: safeFilename(stream.name, 'mp4').replace(/\.mp4$/, ''), subdir: '', save_as: false, will_use_jsfetch: false,
+        strategy: 'm3u8_audio_video_two_sources', muxer: 'mp4', url: new URL(variant.url), url_audio: new URL(variant.audioUrl), carry_get_params: false,
+        extension: 'mp4', is_youtube: false, throttle: false, cache: 'default', duration: 'unknown' });
+      workerBlobUrl = result.internal_bloburl; extension = 'mp4';
+    } else {
+      const result = await hlsBytes(variant.url, headers, p => notifyStreamProgress(tabId, streamUrl, p));
+      blob = new Blob([result.bytes], { type: result.extension === 'mp4' ? 'video/mp4' : 'video/mp2t' }); extension = result.extension;
+    }
+  } else if (stream.type === 'DASH') {
+    if (!variant) throw new Error('The DASH qualities are still loading. Please try again in a moment.');
+    const id = `stream_${crypto.randomUUID()}`; extension = variant.container || 'mp4';
+    const result = await vdownDownload({ download_id: id, headers: new Headers(headers), good_basename: safeFilename(stream.name, extension).replace(new RegExp(`\\.${extension}$`), ''), subdir: '', save_as: false, will_use_jsfetch: true,
+      strategy: 'mpd_audio_video_one_source', muxer: extension, url: new URL(stream.url), carry_get_params: false, entry: variant.workerEntry,
+      duration: 'unknown', extension, is_youtube: false, throttle: false, cache: 'default' });
+    workerBlobUrl = result.internal_bloburl;
+  } else {
+    const bytes = await fetchBytes(stream.url, headers, bytes => notifyStreamProgress(tabId, streamUrl, { phase: 'downloading', bytes }));
+    extension = (stream.type === 'WebM' ? 'webm' : stream.type || 'mp4').toLowerCase(); blob = new Blob([bytes], { type: 'application/octet-stream' });
+  }
+  const objectUrl = workerBlobUrl || URL.createObjectURL(blob);
+  try {
+    const id = await chrome.downloads.download({ url: objectUrl, filename: safeFilename(stream.name, extension), conflictAction: 'uniquify', saveAs: false });
+    notifyStreamProgress(tabId, streamUrl, { phase: 'complete', downloadId: id });
+    return { downloadId: id };
+  } finally {
+    setTimeout(() => {
+      if (workerBlobUrl) vdownChannel.postMessage({ channel: 2, msg: { name: 'revoke_blob_url', data: { blob_url: workerBlobUrl } } });
+      else URL.revokeObjectURL(objectUrl);
+    }, 60_000);
+  }
+}
+
 // ── Message router ────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
@@ -377,6 +628,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const tabId = tabs[0]?.id;
       if (tabId) { tabStreams.delete(tabId); updateBadge(tabId, 0); }
       sendResponse({ ok: true });
+    });
+    return true;
+  }
+
+  if (msg.type === 'DOWNLOAD_STREAM_OFFLINE') {
+    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+      try {
+        const result = await offlineStreamDownload(tabs[0]?.id, msg.streamUrl, msg.variantId);
+        sendResponse({ ok: true, ...result });
+      } catch (error) { sendResponse({ ok: false, error: error.message || String(error) }); }
     });
     return true;
   }
