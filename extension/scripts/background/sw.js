@@ -23,11 +23,59 @@ const lastCookieExtraction = new Map(); // Track last extraction time per tabId
 // ── Stream store ──────────────────────────────────────────────────────────────
 /** @type {Map<number, Map<string, StreamInfo>>} */
 const tabStreams = new Map();
+const offlineStreamJobs = new Map();
+const offlineAbortControllers = new Map();
+const OFFLINE_QUEUE_KEY = 'grabit_offline_stream_queue_v1';
+const STREAM_STORE_KEY = 'grabit_streams_by_tab_v1';
+let persistStreamsTimer = null;
+// MV3 can suspend the service worker within seconds. Persist playlist metadata
+// per tab; preview Blob URLs are regenerated after a service-worker restart.
+const streamStoreReady = chrome.storage.session.get(STREAM_STORE_KEY).then(result => {
+  for (const [tabId, savedStreams] of Object.entries(result[STREAM_STORE_KEY] || {})) {
+    const id = Number(tabId);
+    if (!Number.isInteger(id) || !Array.isArray(savedStreams)) continue;
+    const current = tabStreams.get(id) || new Map();
+    for (const stream of savedStreams) {
+      if (!stream?.url || current.has(stream.url)) continue;
+      delete stream.previewUrl; delete stream.previewPending; delete stream.previewFailed;
+      current.set(stream.url, stream);
+    }
+    tabStreams.set(id, current);
+    updateBadge(id, current.size);
+  }
+}).catch(error => console.debug('[Stream store] restore failed:', error));
+const offlineQueueReady = chrome.storage.session.get(OFFLINE_QUEUE_KEY).then(result => {
+  for (const job of result[OFFLINE_QUEUE_KEY] || []) if (job?.id) offlineStreamJobs.set(job.id, job);
+}).catch(error => console.debug('[Offline queue] restore failed:', error));
+
+function persistStreamStore() {
+  clearTimeout(persistStreamsTimer);
+  persistStreamsTimer = setTimeout(() => {
+    const saved = Object.fromEntries([...tabStreams].map(([tabId, streams]) => [tabId, [...streams.values()].map(stream => {
+      const copy = { ...stream }; delete copy.previewUrl; delete copy.previewPending; delete copy.previewFailed; return copy;
+    })]));
+    chrome.storage.session.set({ [STREAM_STORE_KEY]: saved }).catch(error => console.debug('[Stream store] save failed:', error));
+  }, 100);
+}
+
+function publishOfflineQueue() {
+  const jobs = [...offlineStreamJobs.values()].sort((a, b) => b.createdAt - a.createdAt);
+  chrome.storage.session.set({ [OFFLINE_QUEUE_KEY]: jobs }).catch(() => {});
+  chrome.runtime.sendMessage({ type: 'offline_queue_update', queue: jobs }).catch(() => {});
+}
+
+function updateOfflineJob(id, patch) {
+  const job = offlineStreamJobs.get(id);
+  if (!job) return;
+  Object.assign(job, patch);
+  publishOfflineQueue();
+}
 // Request headers are needed for signed/CDN streams that reject a bare fetch.
 const requestHeaders = new Map();
-let vdownWorker = null;
 let vdownWorkerReady = null;
 const vdownWaiters = new Map();
+const opfsBlobWaiters = new Map();
+let vdownTaskChain = Promise.resolve();
 // ── Playlist scan progress store ────────────────────────────────────────
 /** @type {Map<number, Map<string, any>>} */
 const playlistProgressMap = new Map();
@@ -141,6 +189,7 @@ function addStream(tabId, url, pageTitle, headers = []) {
   map.set(url, stream);
 
   updateBadge(tabId, map.size);
+  persistStreamStore();
 
   // Push to popup if open
   chrome.runtime.sendMessage({ type: 'streams_updated', tabId }).catch(() => {});
@@ -149,7 +198,9 @@ function addStream(tabId, url, pageTitle, headers = []) {
 
 function normalizeHeaders(headers) {
   const allow = new Set(['accept', 'accept-language', 'authorization', 'cookie', 'origin', 'referer', 'user-agent']);
-  return (headers || []).map(h => Array.isArray(h) ? { name: h[0], value: h[1] } : h)
+  const source = headers instanceof Headers ? [...headers.entries()] :
+    (Array.isArray(headers) ? headers : (headers && typeof headers === 'object' ? Object.entries(headers) : []));
+  return source.map(h => Array.isArray(h) ? { name: h[0], value: h[1] } : h)
     .filter(h => h?.name && h.value && allow.has(h.name.toLowerCase()))
     .map(h => [h.name, h.value]);
 }
@@ -176,6 +227,24 @@ function vdownDeserialize(value) {
 
 function optionValue(value) { return value?.__serde_tag ? vdownDeserialize(value) : value; }
 
+function hasResolvedQuality(stream) {
+  return Array.isArray(stream?.variants) && stream.variants.some(variant => Number(variant.height) > 0);
+}
+
+function mergeInferiorStreamDuplicates(map, preferred) {
+  if (!hasResolvedQuality(preferred)) return;
+  for (const [key, candidate] of map) {
+    if (key === preferred.url || hasResolvedQuality(candidate)) continue;
+    // Only merge records that describe the same visible media: same page title
+    // and artwork. This avoids collapsing legitimately separate videos on a
+    // page while removing the generic network record VDown has superseded.
+    const sameTitle = candidate.name === preferred.name;
+    const sameArtwork = Boolean(preferred.thumbnailUrl) && candidate.thumbnailUrl === preferred.thumbnailUrl;
+    const isChildRendition = (preferred.variants || []).some(variant => variant.url === candidate.url || variant.audioUrl === candidate.url);
+    if (isChildRendition || (sameTitle && sameArtwork)) map.delete(key);
+  }
+}
+
 function addDetectorMedia(tabId, rawMedia, pageTitle) {
   const media = vdownDeserialize(rawMedia);
   if (!media || !['m3u8_playlist', 'mpd_playlist'].includes(media.type) || !media.master_url) return false;
@@ -183,26 +252,57 @@ function addDetectorMedia(tabId, rawMedia, pageTitle) {
   if (!url) return false;
   if (!tabStreams.has(tabId)) tabStreams.set(tabId, new Map());
   const map = tabStreams.get(tabId);
-  const playlist = optionValue(media.playlist) || [];
+  const rawPlaylist = optionValue(media.playlist) || [];
+  // VDown detectors normally send the normalized rendition array. Accept the
+  // parser's master-playlist object too, so a detector update can never make
+  // GrabIt fall back to a single unlabelled "Source" entry.
+  const playlist = Array.isArray(rawPlaylist) ? rawPlaylist :
+    (Array.isArray(rawPlaylist.playlists) ? rawPlaylist.playlists : []);
   const variants = playlist.map((entry, index) => {
     const quality = optionValue(entry.quality) || {};
     const size = optionValue(quality.size) || {};
     const av = optionValue(entry.av) || {};
+    const attributes = optionValue(entry.attributes) || {};
+    const resolution = attributes.RESOLUTION || attributes.resolution || {};
+    const width = Number(size.width || resolution.width || 0);
+    const height = Number(size.height || resolution.height || 0);
+    const videoUrl = optionValue(av.video) || optionValue(entry.url) || optionValue(entry.uri) || url;
+    const audioUrl = optionValue(av.audio) || null;
+    let resolvedVideoUrl = videoUrl, resolvedAudioUrl = audioUrl;
+    try { resolvedVideoUrl = new URL(String(videoUrl), url).href; } catch {}
+    try { if (audioUrl) resolvedAudioUrl = new URL(String(audioUrl), url).href; } catch {}
     return {
       id: `${media.type}-${index}`, protocol: media.type === 'mpd_playlist' ? 'dash' : 'hls',
       workerEntry: Number.isFinite(entry.index) ? entry.index : index,
-      url: optionValue(av.video) || url, audioUrl: optionValue(av.audio) || null,
-      width: Number(size.width || 0), height: Number(size.height || 0), bitrate: Number(optionValue(quality.bitrate) || 0),
+      url: resolvedVideoUrl, audioUrl: resolvedAudioUrl,
+      width, height, bitrate: Number(optionValue(quality.bitrate) || attributes.BANDWIDTH || attributes.bandwidth || 0),
       codecs: '', container: optionValue(entry.demuxer) || 'mp4'
     };
   }).sort((a, b) => b.height - a.height || b.bitrate - a.bitrate);
+  // VDown's deduplication rule: once a master playlist is known, discard the
+  // child rendition entries discovered from the network. They are not separate
+  // videos and were the source of GrabIt's duplicate cards.
+  const childUrls = new Set(variants.flatMap(variant => [variant.url, variant.audioUrl]).filter(Boolean));
+  for (const [key, candidate] of map) {
+    const candidateVariants = candidate.variants || [];
+    const isSamePlaylist = candidate.type === (media.type === 'mpd_playlist' ? 'DASH' : 'HLS') &&
+      candidateVariants.some(variant => childUrls.has(variant.url));
+    if (key !== url && (childUrls.has(candidate.url) || isSamePlaylist)) map.delete(key);
+  }
   const existing = map.get(url);
   map.set(url, {
     url, type: media.type === 'mpd_playlist' ? 'DASH' : 'HLS', name: optionValue(media.title) || pageTitle || urlName(url),
     quality: null, headers: normalizeHeaders(optionValue(media.sent_headers)), variants, parsing: false, ts: Date.now(),
+    // A detector does not always provide artwork. Preserve the page poster and
+    // an already generated VDown preview when it re-announces this media.
+    thumbnailUrl: optionValue(media.thumbnail_url) || existing?.thumbnailUrl || null,
+    previewFile: existing?.previewFile || null, previewUrl: null,
+    source: 'detector',
     manifestError: variants.length ? null : 'The site exposed no downloadable variants.'
   });
+  mergeInferiorStreamDuplicates(map, map.get(url));
   updateBadge(tabId, map.size);
+  persistStreamStore();
   chrome.runtime.sendMessage({ type: 'streams_updated', tabId }).catch(() => {});
   return !existing;
 }
@@ -218,7 +318,7 @@ function mimeFromCodecs(codecs = '') {
 }
 
 function parseHlsMaster(text, masterUrl) {
-  const lines = text.split(/\r?\n/);
+  const lines = text.split(/\r?\n/).map(line => line.trim());
   const audioGroups = new Map();
   for (const line of lines) {
     if (!line.startsWith('#EXT-X-MEDIA:')) continue;
@@ -230,7 +330,7 @@ function parseHlsMaster(text, masterUrl) {
   for (let i = 0; i < lines.length; i++) {
     if (!lines[i].startsWith('#EXT-X-STREAM-INF:')) continue;
     const a = attributes(lines[i].slice(18));
-    const uri = lines.slice(i + 1).find(x => x.trim() && !x.startsWith('#'));
+    const uri = lines.slice(i + 1).find(x => x && !x.startsWith('#'));
     if (!uri) continue;
     const [width, height] = (a.RESOLUTION || 'x').split('x').map(Number);
     variants.push({ id: `hls-${variants.length}`, protocol: 'hls', url: new URL(uri.trim(), masterUrl).href,
@@ -272,6 +372,13 @@ async function enrichManifest(tabId, stream) {
     // A media playlist is a valid single-quality HLS source.
     stream.variants = variants.length ? variants.sort((a, b) => b.height - a.height || b.bitrate - a.bitrate) :
       stream.type === 'HLS' ? [{ id: 'hls-source', protocol: 'hls', url: stream.url, width: 0, height: 0, bitrate: 0, codecs: '', container: 'mp4' }] : [];
+    if (variants.length) {
+      const childUrls = new Set(variants.flatMap(variant => [variant.url, variant.audioUrl]).filter(Boolean));
+      const map = tabStreams.get(tabId);
+      for (const [key, candidate] of map || []) if (key !== stream.url && childUrls.has(candidate.url)) map.delete(key);
+      if (map) mergeInferiorStreamDuplicates(map, stream);
+      stream.previewUrl = null;
+    }
   } catch (error) {
     stream.manifestError = error.message;
     // If we cannot fetch the manifest, assume it's a media playlist and use it as a single variant (for HLS only)
@@ -282,6 +389,7 @@ async function enrichManifest(tabId, stream) {
     }
   } finally {
     stream.parsing = false;
+    persistStreamStore();
     chrome.runtime.sendMessage({ type: 'streams_updated', tabId }).catch(() => {});
   }
 }
@@ -419,6 +527,7 @@ chrome.webRequest.onHeadersReceived.addListener((details) => {
     map.set(details.url, { url: details.url, type, name: tab?.title || urlName(details.url), quality: null,
       headers: normalizeHeaders(requestHeaders.get(details.requestId)), variants: null, parsing: false, ts: Date.now() });
     updateBadge(details.tabId, map.size);
+    persistStreamStore();
     const stream = map.get(details.url);
     chrome.runtime.sendMessage({ type: 'streams_updated', tabId: details.tabId }).catch(() => {});
     if (type === 'HLS' || type === 'DASH') enrichManifest(details.tabId, stream);
@@ -428,13 +537,11 @@ chrome.webRequest.onHeadersReceived.addListener((details) => {
 // ── Tab lifecycle ─────────────────────────────────────────────────────────────
 chrome.tabs.onRemoved.addListener((tabId) => {
   tabStreams.delete(tabId);
+  persistStreamStore();
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === 'loading') {
-    tabStreams.delete(tabId);
-    updateBadge(tabId, 0);
-  } else if (changeInfo.status === 'complete' && tabId >= 0) {
+  if (changeInfo.status === 'complete' && tabId >= 0) {
     // Get the tab URL to check if it's YouTube/Instagram
     chrome.tabs.get(tabId).then(tab => {
       if (tab && tab.url) {
@@ -478,7 +585,14 @@ function domScannerScript() {
     while ((m = rx.exec(text)) !== null) check(m[0]);
   });
 
-  return found;
+  // Match VDown's initial card state: show the page/video artwork immediately,
+  // then replace it with a short generated preview once the pointer enters it.
+  const video = document.querySelector('video');
+  const image = document.querySelector(
+    'meta[property="og:image"],meta[name="twitter:image"],link[rel="image_src"],link[rel="thumbnail"],link[as="image"]'
+  );
+  const thumbnailUrl = video?.poster || image?.content || image?.href || '';
+  return { streams: found, thumbnailUrl };
 }
 
 async function scanDomOfTab(tabId) {
@@ -487,8 +601,24 @@ async function scanDomOfTab(tabId) {
       target: { tabId },
       func: domScannerScript,
     });
-    const found = results?.[0]?.result || [];
+    const scan = results?.[0]?.result || [];
+    // Older injected scanners returned the array directly. Keep accepting it
+    // so an already-open page is never made incompatible by this UI update.
+    const found = Array.isArray(scan) ? scan : (scan.streams || []);
     found.forEach(({ url, pageTitle }) => addStream(tabId, url, pageTitle));
+    const thumbnailUrl = Array.isArray(scan) ? '' : scan.thumbnailUrl;
+    if (thumbnailUrl) {
+      const streams = tabStreams.get(tabId);
+      let changed = false;
+      for (const stream of streams?.values() || []) {
+        if (!stream.thumbnailUrl) { stream.thumbnailUrl = thumbnailUrl; changed = true; }
+      }
+      if (changed) {
+        for (const stream of [...streams.values()]) mergeInferiorStreamDuplicates(streams, stream);
+        updateBadge(tabId, streams.size);
+        persistStreamStore();
+      }
+    }
   } catch {} // may fail on chrome:// pages — ignore
 }
 
@@ -531,14 +661,46 @@ chrome.notifications.onButtonClicked.addListener((notifId, btnIndex) => {
   chrome.runtime.sendMessage({ type: 'notification_action', id, action: btnIndex === 0 ? 'open_file' : 'open_folder' }).catch(() => {});
 });
 
+// Browser downloads continue after the extension worker sleeps. Reflect their
+// authoritative lifecycle in the same queue used by server-backed downloads.
+chrome.downloads.onChanged.addListener(async delta => {
+  const job = [...offlineStreamJobs.values()].find(item => item.browserDownloadId === delta.id);
+  if (!job) return;
+  const patch = {};
+  if (delta.bytesReceived?.current != null || delta.totalBytes?.current != null) {
+    const received = delta.bytesReceived?.current ?? job.receivedBytes ?? 0;
+    const total = delta.totalBytes?.current ?? job.totalBytes ?? 0;
+    patch.receivedBytes = received; patch.totalBytes = total;
+    patch.progress = { percent: total > 0 ? Math.round(received * 100 / total) : job.progress?.percent || 100, detail: total > 0 ? `${Math.round(received * 100 / total)}% saved` : 'Saving…' };
+  }
+  if (delta.error?.current) { patch.status = 'failed'; patch.error = delta.error.current; }
+  if (delta.state?.current === 'complete') {
+    const [item] = await chrome.downloads.search({ id: delta.id });
+    patch.status = 'complete'; patch.progress = { percent: 100, detail: 'Saved to Streams' }; patch.file = item?.filename || '';
+  }
+  if (delta.state?.current === 'interrupted') { patch.status = 'failed'; patch.error = delta.error?.current || 'Download interrupted'; }
+  updateOfflineJob(job.id, patch);
+});
+
 // VDown's browser-only worker is vendored separately so its large generated
 // LibAV bundle is not duplicated in this source file. It uses this exact channel.
 const vdownChannel = new BroadcastChannel('worker_service');
 vdownChannel.addEventListener('message', event => {
   if (event.data?.channel !== 3) return;
   const message = event.data.msg;
+  if (message?.name === 'blob_url_from_file') {
+    const waiter = opfsBlobWaiters.get(message.data?.request_id);
+    if (!waiter) return;
+    opfsBlobWaiters.delete(message.data.request_id);
+    message.data?.blob_url ? waiter.resolve(message.data.blob_url) : waiter.reject(new Error(message.data?.error || 'Could not prepare the stream file for download.'));
+    return;
+  }
   const id = message?.data?.download_id;
-  if (message?.name === 'download_progress' && id) notifyStreamProgress(null, id, message.data.progress);
+  if (message?.name === 'download_progress' && id) {
+    const waiter = vdownWaiters.get(id);
+    waiter?.onProgress?.(message.data.progress);
+    notifyStreamProgress(null, id, message.data.progress);
+  }
   if ((message?.name === 'download_result' || message?.name === 'download_error') && id) {
     const waiter = vdownWaiters.get(id);
     if (!waiter) return;
@@ -556,28 +718,134 @@ function vdownSerialize(value) {
   return { __serde_tag: 'object', __serde_val: output };
 }
 
+async function ensureStreamWorkerHost() {
+  // VDown runs LibAV in an offscreen document. A Manifest V3 service worker is
+  // short-lived and is not a reliable place to own a dedicated worker.
+  if (!chrome.offscreen) throw new Error('This browser does not support the offscreen worker required for stream previews.');
+  if (await chrome.offscreen.hasDocument()) return;
+  try {
+    await chrome.offscreen.createDocument({
+      url: 'pages/stream-worker-host.html',
+      reasons: [chrome.offscreen.Reason.WORKERS],
+      justification: 'Run the local LibAV worker used for offline stream previews and remuxing.'
+    });
+  } catch (error) {
+    // Another service-worker event can race this call; in that case the
+    // document already exists and is safe to use.
+    if (!(await chrome.offscreen.hasDocument())) throw error;
+  }
+}
+
 async function ensureVdownWorker() {
   if (vdownWorkerReady) return vdownWorkerReady;
   vdownWorkerReady = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('LibAV worker files are not installed. See scripts/stream-worker/README.md.')), 4000);
+    const timer = setTimeout(() => {
+      vdownChannel.removeEventListener('message', ready);
+      reject(new Error('LibAV worker did not start. Confirm the stream-worker files are installed.'));
+    }, 10_000);
     const ready = event => {
       if (event.data?.channel === 3 && event.data?.msg?.name === 'is_ready_success') {
         clearTimeout(timer); vdownChannel.removeEventListener('message', ready); resolve();
       }
     };
     vdownChannel.addEventListener('message', ready);
-    try { vdownWorker = new Worker(chrome.runtime.getURL('scripts/stream-worker/main.js'), { type: 'module' }); }
-    catch (error) { clearTimeout(timer); vdownChannel.removeEventListener('message', ready); reject(error); }
   });
-  try { return await vdownWorkerReady; } catch (error) { vdownWorkerReady = null; throw error; }
+  try {
+    await ensureStreamWorkerHost();
+    // Same handshake used by VDown. It also handles the case where the worker
+    // was created before this service worker woke up.
+    vdownChannel.postMessage({ channel: 2, msg: { name: 'is_ready', data: null } });
+    return await vdownWorkerReady;
+  } catch (error) { vdownWorkerReady = null; throw error; }
 }
 
-async function vdownDownload(args) {
+async function vdownDownloadNow(args, onProgress) {
   await ensureVdownWorker();
   return new Promise((resolve, reject) => {
-    vdownWaiters.set(args.download_id, { resolve, reject });
+    vdownWaiters.set(args.download_id, { resolve, reject, onProgress });
     vdownChannel.postMessage({ channel: 2, msg: { name: 'download', data: { download_args: vdownSerialize(args) } } });
   });
+}
+
+// LibAV owns a shared virtual filesystem. VDown submits operations through a
+// queue; doing the same prevents a hover-preview job from corrupting or
+// aborting an Instagram download that starts at the same time.
+function vdownDownload(args, onProgress) {
+  const task = vdownTaskChain.then(
+    () => vdownDownloadNow(args, onProgress),
+    () => vdownDownloadNow(args, onProgress)
+  );
+  vdownTaskChain = task.catch(() => {});
+  return task;
+}
+
+function workerFailure(result) {
+  const reason = result?.ending_reason;
+  if (typeof reason === 'string') return reason;
+  if (reason?.message) return reason.message;
+  if (reason?.details) return reason.details;
+  return 'The stream worker could not download this media. It may be protected, expired, or unavailable.';
+}
+
+async function workerDownloadUrl(result) {
+  if (result?.aborted_no_partial) throw new Error(workerFailure(result));
+  return result?.internal_bloburl || opfsBlobUrl(result?.internal_filename);
+}
+
+async function opfsBlobUrl(filename) {
+  if (!filename) throw new Error('The local stream worker returned neither a file nor a download URL.');
+  await ensureVdownWorker();
+  const requestId = `opfs_${crypto.randomUUID()}`;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { opfsBlobWaiters.delete(requestId); reject(new Error('Timed out while preparing the stream file for download.')); }, 10_000);
+    opfsBlobWaiters.set(requestId, {
+      resolve: url => { clearTimeout(timer); resolve(url); },
+      reject: error => { clearTimeout(timer); reject(error); }
+    });
+    vdownChannel.postMessage({ channel: 2, msg: { name: 'create_blob_url_from_file', data: { request_id: requestId, filename } } });
+  });
+}
+
+async function prepareStreamPreview(tabId, streamUrl, force = false) {
+  const stream = tabStreams.get(tabId)?.get(streamUrl);
+  if (force && stream) { stream.previewFile = null; stream.previewFailed = false; }
+  if (!stream || stream.previewFile || stream.previewUrl || stream.previewPending) return stream?.previewFile || stream?.previewUrl || null;
+  const variants = stream.variants || [];
+  const variant = variants.find(item => item.height === 480) || variants.find(item => item.height === 260) || variants[variants.length - 1];
+  if ((stream.type === 'HLS' || stream.type === 'DASH') && !variant?.url) return null;
+  stream.previewFailed = false;
+  stream.previewPending = true;
+  try {
+    const id = `preview_${crypto.randomUUID()}`;
+    const common = { download_id: id, headers: new Headers(stream.headers || []), good_basename: 'preview', subdir: '', save_as: false,
+      muxer: 'mp4', carry_get_params: false, extension: 'mp4', is_youtube: false, throttle: false, cache: 'default' };
+    let args;
+    if (stream.type === 'HLS') {
+      args = { ...common, will_use_jsfetch: false, strategy: 'm3u8_video_preview', url: new URL(variant.url) };
+    } else if (stream.type === 'DASH') {
+      args = { ...common, will_use_jsfetch: true, strategy: 'mpd_video_preview', url: new URL(stream.url), entry: variant.workerEntry, duration: 'unknown' };
+    } else {
+      // This is VDown's http_playlist preview route. Do not point a popup
+      // <video> at a cross-origin source: create a short local OPFS preview
+      // instead, which is reliable for direct MP4/WebM streams as well.
+      args = { ...common, will_use_jsfetch: true, strategy: 'http_video_preview_jsfetch', url: new URL(stream.url) };
+    }
+    const result = await vdownDownload(args);
+    // Worker Blob URLs are scoped to the worker and cannot be played by the
+    // popup. VDown passes the OPFS filename and lets the UI create its own URL.
+    stream.previewFile = result.internal_filename || null;
+    stream.previewUrl = null;
+    return stream.previewFile;
+  } catch (error) {
+    stream.previewFailed = true;
+    console.debug('[Stream preview] unavailable:', error.message || error);
+    chrome.runtime.sendMessage({ type: 'stream_preview_error', tabId, streamUrl, error: error.message || String(error) }).catch(() => {});
+    return null;
+  } finally {
+    stream.previewPending = false;
+    persistStreamStore();
+    chrome.runtime.sendMessage({ type: 'streams_updated', tabId }).catch(() => {});
+  }
 }
 
 // ── Offline Stream-tab downloader ───────────────────────────────────────────
@@ -593,8 +861,8 @@ function notifyStreamProgress(tabId, streamUrl, progress) {
   chrome.runtime.sendMessage({ type: 'stream_download_progress', tabId, streamUrl, progress }).catch(() => {});
 }
 
-async function fetchBytes(url, headers, onProgress) {
-  const response = await fetch(url, { headers: Object.fromEntries(headers || []), credentials: 'include' });
+async function fetchBytes(url, headers, onProgress, signal) {
+  const response = await fetch(url, { headers: Object.fromEntries(headers || []), credentials: 'include', signal });
   if (!response.ok) throw new Error(`HTTP ${response.status} while fetching media`);
   const reader = response.body?.getReader();
   if (!reader) return new Uint8Array(await response.arrayBuffer());
@@ -605,8 +873,8 @@ async function fetchBytes(url, headers, onProgress) {
   return result;
 }
 
-async function hlsBytes(playlistUrl, headers, progress) {
-  const response = await fetch(playlistUrl, { headers: Object.fromEntries(headers || []), credentials: 'include' });
+async function hlsBytes(playlistUrl, headers, progress, signal) {
+  const response = await fetch(playlistUrl, { headers: Object.fromEntries(headers || []), credentials: 'include', signal });
   if (!response.ok) throw new Error(`HTTP ${response.status} while fetching HLS playlist`);
   const text = await response.text();
   if (/^#EXT-X-KEY:.*METHOD=(?!NONE)/mi.test(text)) throw new Error('Encrypted HLS/DRM streams cannot be downloaded.');
@@ -619,7 +887,7 @@ async function hlsBytes(playlistUrl, headers, progress) {
   if (!urls.length) throw new Error('HLS media playlist contains no segments.');
   const all = init ? [init, ...urls] : urls, parts = []; let loaded = 0;
   for (let i = 0; i < all.length; i++) {
-    const bytes = await fetchBytes(all[i], headers); parts.push(bytes); loaded += bytes.byteLength;
+    const bytes = await fetchBytes(all[i], headers, undefined, signal); parts.push(bytes); loaded += bytes.byteLength;
     progress({ phase: 'downloading', completed: i + 1, total: all.length, bytes: loaded });
   }
   const output = new Uint8Array(loaded); let offset = 0;
@@ -632,41 +900,67 @@ async function offlineStreamDownload(tabId, streamUrl, variantId) {
   if (!stream) throw new Error('The selected stream is no longer available. Refresh the page and try again.');
   const variant = stream.variants?.find(v => v.id === variantId) || null;
   const headers = stream.headers || [];
+  const jobId = `stream_${crypto.randomUUID()}`;
+  const abortController = new AbortController();
+  offlineAbortControllers.set(jobId, abortController);
+  offlineStreamJobs.set(jobId, { id: jobId, source: 'stream', title: stream.name, url: streamUrl, tabId, status: 'downloading', createdAt: Date.now(),
+    progress: { percent: 0, detail: 'Preparing stream…' }, browserDownloadId: null });
+  publishOfflineQueue();
+  const report = progress => {
+    const percent = progress.percent?.is_known ? Math.round(progress.percent.value) :
+      (progress.total ? Math.round((progress.completed || 0) * 100 / progress.total) : undefined);
+    updateOfflineJob(jobId, { progress: { percent: Number.isFinite(percent) ? percent : 0, detail: progress.total ? `${progress.completed}/${progress.total} segments` : 'Downloading stream…' } });
+    notifyStreamProgress(tabId, streamUrl, progress);
+  };
   notifyStreamProgress(tabId, streamUrl, { phase: 'starting' });
-  let blob, extension, workerBlobUrl = null;
-  if (stream.type === 'HLS') {
+  let extension, workerBlobUrl = null;
+  try { if (stream.type === 'HLS') {
     if (!variant) throw new Error('The HLS qualities are still loading. Please try again in a moment.');
-    if (variant.audioUrl) {
-      const id = `stream_${crypto.randomUUID()}`;
-      const result = await vdownDownload({ download_id: id, headers: new Headers(headers), good_basename: safeFilename(stream.name, 'mp4').replace(/\.mp4$/, ''), subdir: '', save_as: false, will_use_jsfetch: false,
-        strategy: 'm3u8_audio_video_two_sources', muxer: 'mp4', url: new URL(variant.url), url_audio: new URL(variant.audioUrl), carry_get_params: false,
-        extension: 'mp4', is_youtube: false, throttle: false, cache: 'default', duration: 'unknown' });
-      workerBlobUrl = result.internal_bloburl; extension = 'mp4';
-    } else {
-      const result = await hlsBytes(variant.url, headers, p => notifyStreamProgress(tabId, streamUrl, p));
-      blob = new Blob([result.bytes], { type: result.extension === 'mp4' ? 'video/mp4' : 'video/mp2t' }); extension = result.extension;
-    }
+    const id = `stream_${crypto.randomUUID()}`;
+    extension = variant.container === 'webm' ? 'webm' : 'mp4';
+    updateOfflineJob(jobId, { workerDownloadId: id });
+    // VDown keeps all media bytes in its worker/OPFS. Service workers cannot
+    // create Blob URLs, so use the same route for both one- and two-source HLS.
+    const result = await vdownDownload({ download_id: id, headers: new Headers(headers), good_basename: safeFilename(stream.name, extension).replace(new RegExp(`\\.${extension}$`), ''), subdir: '', save_as: false, will_use_jsfetch: false,
+      strategy: variant.audioUrl ? 'm3u8_audio_video_two_sources' : 'm3u8_audio_video_one_source', muxer: extension, url: new URL(variant.url),
+      ...(variant.audioUrl ? { url_audio: new URL(variant.audioUrl) } : {}), carry_get_params: false,
+      extension, is_youtube: false, throttle: false, cache: 'default', duration: 'unknown' }, report);
+    workerBlobUrl = await workerDownloadUrl(result);
   } else if (stream.type === 'DASH') {
     if (!variant) throw new Error('The DASH qualities are still loading. Please try again in a moment.');
     const id = `stream_${crypto.randomUUID()}`; extension = variant.container || 'mp4';
+    updateOfflineJob(jobId, { workerDownloadId: id });
     const result = await vdownDownload({ download_id: id, headers: new Headers(headers), good_basename: safeFilename(stream.name, extension).replace(new RegExp(`\\.${extension}$`), ''), subdir: '', save_as: false, will_use_jsfetch: true,
       strategy: 'mpd_audio_video_one_source', muxer: extension, url: new URL(stream.url), carry_get_params: false, entry: variant.workerEntry,
-      duration: 'unknown', extension, is_youtube: false, throttle: false, cache: 'default' });
-    workerBlobUrl = result.internal_bloburl;
+      duration: 'unknown', extension, is_youtube: false, throttle: false, cache: 'default' }, report);
+    workerBlobUrl = await workerDownloadUrl(result);
   } else {
-    const bytes = await fetchBytes(stream.url, headers, bytes => notifyStreamProgress(tabId, streamUrl, { phase: 'downloading', bytes }));
-    extension = (stream.type === 'WebM' ? 'webm' : stream.type || 'mp4').toLowerCase(); blob = new Blob([bytes], { type: 'application/octet-stream' });
+    const id = `stream_${crypto.randomUUID()}`;
+    extension = (stream.type === 'WebM' ? 'webm' : stream.type || 'mp4').toLowerCase();
+    updateOfflineJob(jobId, { workerDownloadId: id });
+    const result = await vdownDownload({ download_id: id, headers: new Headers(headers), good_basename: safeFilename(stream.name, extension).replace(new RegExp(`\\.${extension}$`), ''), subdir: '', save_as: false,
+      will_use_jsfetch: false, strategy: 'http_audio_video_one_source', url: new URL(stream.url), carry_get_params: false,
+      extension, is_youtube: false, throttle: false, cache: 'default' }, report);
+    workerBlobUrl = await workerDownloadUrl(result);
   }
-  const objectUrl = workerBlobUrl || URL.createObjectURL(blob);
+  if (abortController.signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+  if (!workerBlobUrl) throw new Error('The local stream worker did not return a downloadable file.');
   try {
-    const id = await chrome.downloads.download({ url: objectUrl, filename: safeFilename(stream.name, extension), conflictAction: 'uniquify', saveAs: false });
+    updateOfflineJob(jobId, { progress: { percent: 100, detail: 'Saving to Downloads/Streams…' } });
+    const id = await chrome.downloads.download({ url: workerBlobUrl, filename: `Streams/${safeFilename(stream.name, extension)}`, conflictAction: 'uniquify', saveAs: false });
+    updateOfflineJob(jobId, { browserDownloadId: id, progress: { percent: 100, detail: 'Browser download started' } });
     notifyStreamProgress(tabId, streamUrl, { phase: 'complete', downloadId: id });
-    return { downloadId: id };
+    return { downloadId: id, jobId };
   } finally {
     setTimeout(() => {
       if (workerBlobUrl) vdownChannel.postMessage({ channel: 2, msg: { name: 'revoke_blob_url', data: { blob_url: workerBlobUrl } } });
-      else URL.revokeObjectURL(objectUrl);
     }, 60_000);
+  }
+  } catch (error) {
+    updateOfflineJob(jobId, abortController.signal.aborted ? { status: 'cancelled', progress: { percent: 0, detail: 'Cancelled' } } : { status: 'failed', error: error.message || String(error) });
+    throw error;
+  } finally {
+    offlineAbortControllers.delete(jobId);
   }
 }
 
@@ -679,7 +973,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.channel === 0 && msg?.msg?.name === 'on_media') {
     const tabId = sender.tab?.id;
     if (tabId != null) {
-      addDetectorMedia(tabId, msg.msg.data?.media, sender.tab?.title || '');
+      try { addDetectorMedia(tabId, msg.msg.data?.media, sender.tab?.title || ''); }
+      catch (error) { console.debug('[VDown detector] ignored malformed media:', error.message || error); }
       sendResponse({ ok: true });
     }
     return true;
@@ -688,6 +983,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Popup asking for all detected streams on the active tab
   if (msg.type === 'GET_STREAMS') {
     chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+      await streamStoreReady;
       const tabId = tabs[0]?.id;
       if (tabId) await scanDomOfTab(tabId); // run DOM scan on every popup open
       const streams = tabId ? [...(tabStreams.get(tabId)?.values() || [])] : [];
@@ -704,9 +1000,35 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'CLEAR_STREAMS') {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tabId = tabs[0]?.id;
-      if (tabId) { tabStreams.delete(tabId); updateBadge(tabId, 0); }
+      if (tabId) { tabStreams.delete(tabId); updateBadge(tabId, 0); persistStreamStore(); }
       sendResponse({ ok: true });
     });
+    return true;
+  }
+
+  if (msg.type === 'GET_OFFLINE_STREAM_QUEUE') {
+    offlineQueueReady.then(() => sendResponse({ queue: [...offlineStreamJobs.values()] }));
+    return true;
+  }
+
+  if (msg.type === 'OFFLINE_STREAM_QUEUE_ACTION') {
+    const job = offlineStreamJobs.get(msg.id);
+    (async () => {
+      try {
+        if (msg.action === 'cancel' && job) {
+          offlineAbortControllers.get(job.id)?.abort();
+          if (job.workerDownloadId) vdownChannel.postMessage({ channel: 2, msg: { name: 'abort_download', data: { download_id: job.workerDownloadId } } });
+          if (job.browserDownloadId != null) await chrome.downloads.cancel(job.browserDownloadId);
+          else updateOfflineJob(job.id, { status: 'cancelled', progress: { percent: 0, detail: 'Cancelled' } });
+        }
+        if (msg.action === 'remove' && job) { offlineStreamJobs.delete(job.id); publishOfflineQueue(); }
+        if (msg.action === 'clear-completed') {
+          for (const [id, item] of offlineStreamJobs) if (item.status === 'complete' || item.status === 'failed') offlineStreamJobs.delete(id);
+          publishOfflineQueue();
+        }
+        sendResponse({ ok: true });
+      } catch (error) { sendResponse({ ok: false, error: error.message || String(error) }); }
+    })();
     return true;
   }
 
@@ -716,6 +1038,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const result = await offlineStreamDownload(tabs[0]?.id, msg.streamUrl, msg.variantId);
         sendResponse({ ok: true, ...result });
       } catch (error) { sendResponse({ ok: false, error: error.message || String(error) }); }
+    });
+    return true;
+  }
+
+  if (msg.type === 'REQUEST_STREAM_PREVIEW') {
+    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+      try { sendResponse({ ok: true, previewFile: await prepareStreamPreview(tabs[0]?.id, msg.streamUrl, Boolean(msg.force)) }); }
+      catch (error) { sendResponse({ ok: false, error: error.message || String(error) }); }
     });
     return true;
   }

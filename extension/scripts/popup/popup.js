@@ -28,8 +28,19 @@ const state = {
   wsRetry: null,
   selectedQuality: 'best',
   selectedAudioFmt: 'mp3',
+  offlineQueue: [],
+  serverQueue: [],
   igSelectedSlide: null // override for "Download Selected Slide"
 };
+
+// A Blob URL belongs to the popup document. Keep VDown's worker output in
+// OPFS and create these URLs here, rather than trying to play a worker-scoped
+// Blob URL (which is why the previous cards stayed black).
+const previewObjectUrls = new Set();
+window.addEventListener('unload', () => {
+  for (const url of previewObjectUrls) URL.revokeObjectURL(url);
+  previewObjectUrls.clear();
+});
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 async function api(method, path, body) {
@@ -388,7 +399,8 @@ function connectWS() {
 
 function handleWSMessage(msg) {
   if (msg.type === 'queue_update') {
-    state.queue = msg.queue || [];
+    state.serverQueue = msg.queue || [];
+    mergeQueues();
     renderQueue();
     updateQueueBadge();
   }
@@ -422,10 +434,21 @@ function handleWSMessage(msg) {
   if (msg.type === 'streams_updated') {
     if (state.activeTab === 'streams') loadStreams();
   }
+  if (msg.type === 'offline_queue_update') {
+    state.offlineQueue = msg.queue || [];
+    mergeQueues();
+    renderQueue();
+    updateQueueBadge();
+  }
   if (msg.type === 'stream_download_progress' && state.activeTab === 'streams') {
     const p = msg.progress || {};
     if (p.phase === 'downloading' && p.total) toast(`Downloading segment ${p.completed}/${p.total}`);
     if (p.phase === 'complete') toast('Browser download started', 'success');
+  }
+  if (msg.type === 'stream_preview_error' && state.activeTab === 'streams') {
+    // Keep this short; the detailed error remains in the extension service
+    // worker console and a later hover can retry the preview.
+    toast('Preview unavailable for this stream', 'error');
   }
 }
 
@@ -1107,84 +1130,135 @@ function renderStreams(container, streams) {
     return;
   }
 
-  // Group by type
-  const groups = {};
-  for (const s of streams) {
-    (groups[s.type] = groups[s.type] || []).push(s);
-  }
-
-  const TYPE_ORDER = ['HLS','DASH','MP4','WebM','MKV','MOV','FLV','TS','Stream'];
-  let html = '';
-  let index = 0;
-  for (const type of TYPE_ORDER) {
-    if (!groups[type]) continue;
-    html += `
-      <div class="yt-quality-label" style="margin-top:8px">${typeBadge(type)} ${type === 'HLS' ? 'HLS Streams (m3u8)' : type === 'DASH' ? 'DASH Streams (mpd)' : `${type} Files`} <span style="color:var(--text3)">(${groups[type].length})</span></div>
-      <div class="yt-quality-list">
-        ${groups[type].map((s, i) => {
-          const globalIndex = index++;
-          return streamRow(s, globalIndex);
-        }).join('')}
-      </div>`;
-  }
-  container.innerHTML = html;
+  container.innerHTML = streams.map((stream, index) => streamCard(stream, index)).join('');
 
   // Stream-tab downloads stay inside the extension; they never use the local server.
-  container.querySelectorAll('.download-btn').forEach(btn => {
+  container.querySelectorAll('.stream-download').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const select = document.getElementById(`quality-select-${btn.dataset.idx}`);
+      const qualityPicker = container.querySelector(`.stream-quality-picker[data-stream-index="${btn.dataset.streamIndex}"]`);
       btn.textContent = '⏳';
       btn.disabled    = true;
-      chrome.runtime.sendMessage({ type: 'DOWNLOAD_STREAM_OFFLINE', streamUrl: btn.dataset.url, variantId: select?.value || '' }, (result) => {
+      chrome.runtime.sendMessage({ type: 'DOWNLOAD_STREAM_OFFLINE', streamUrl: btn.dataset.url, variantId: qualityPicker?.dataset.variantId || '' }, (result) => {
         if (chrome.runtime.lastError || !result?.ok) {
           toast(result?.error || chrome.runtime.lastError?.message || 'Offline download failed', 'error');
-          btn.textContent = '⬇ Download'; btn.disabled = false;
+          btn.textContent = 'Download'; btn.disabled = false;
         } else { btn.textContent = '✓ Added'; toast('Downloading in browser', 'success'); }
       });
     });
   });
+  container.querySelectorAll('.stream-quality-picker').forEach(picker => {
+    picker.addEventListener('click', () => {
+      const wrap = picker.closest('.stream-quality-wrap');
+      const shouldOpen = !wrap.classList.contains('open');
+      container.querySelectorAll('.stream-quality-wrap.open').forEach(item => {
+        item.classList.remove('open'); item.closest('.stream-card')?.classList.remove('quality-open');
+      });
+      if (shouldOpen) { wrap.classList.add('open'); wrap.closest('.stream-card')?.classList.add('quality-open'); }
+    });
+  });
+  container.querySelectorAll('.stream-quality-option').forEach(option => {
+    option.addEventListener('click', () => {
+      const wrap = option.closest('.stream-quality-wrap');
+      const picker = wrap.querySelector('.stream-quality-picker');
+      picker.dataset.variantId = option.dataset.variantId;
+      picker.textContent = option.dataset.shortLabel;
+      wrap.classList.remove('open'); wrap.closest('.stream-card')?.classList.remove('quality-open');
+    });
+  });
+  container.querySelectorAll('.stream-card').forEach(card => {
+    const video = card.querySelector('.stream-preview');
+    if (!video) return;
+    const requestPreview = (force = false) => chrome.runtime.sendMessage({
+      type: 'REQUEST_STREAM_PREVIEW', streamUrl: video.dataset.streamUrl, force
+    }, () => {});
+    card.addEventListener('mouseenter', () => {
+      // This is VDown's interaction: show the poster at rest, create the
+      // short local preview only when the user hovers a media card, then play.
+      if (video.src) video.play().catch(() => {});
+      else if (video.dataset.needsPreview === 'true') requestPreview();
+    });
+    card.addEventListener('mouseleave', () => { video.pause(); video.currentTime = 0; });
+    // The generated preview may finish while the pointer is already over the
+    // card. Start it in that case without requiring the user to move away and
+    // hover a second time.
+    video.addEventListener('loadeddata', () => { if (card.matches(':hover')) video.play().catch(() => {}); });
+  });
+  container.querySelectorAll('.stream-preview').forEach(video => {
+    if (video.dataset.previewFile) {
+      loadStoredStreamPreview(video);
+    }
+  });
 }
 
-function streamRow(s, idx) {
-  // Shorten URL for display: show host + last path segment
-  let display = s.url;
+async function loadStoredStreamPreview(video) {
   try {
-    const u = new URL(s.url);
-    const seg = u.pathname.split('/').filter(Boolean).slice(-2).join('/');
-    display = u.hostname + (seg ? '/' + seg : '');
-    if (display.length > 60) display = display.slice(0, 57) + '…';
-  } catch {}
+    const root = await navigator.storage.getDirectory();
+    const handle = await root.getFileHandle(video.dataset.previewFile);
+    const file = await handle.getFile();
+    const url = URL.createObjectURL(file);
+    if (!video.isConnected) { URL.revokeObjectURL(url); return false; }
+    previewObjectUrls.add(url);
+    video.src = url;
+    return true;
+  } catch {
+    // Extension storage may have been cleared while stream metadata survived.
+    // Let the next hover rebuild the VDown preview instead of leaving a dead
+    // filename that can never play.
+    video.dataset.previewFile = '';
+    video.dataset.needsPreview = 'true';
+    return false;
+  }
+}
 
-  const qualBadge = s.quality ? `<span style="font-size:10px;background:var(--surface2);border-radius:3px;padding:1px 5px;margin-left:4px">${s.quality}</span>` : '';
+function streamVariantLabel(variant, stream) {
+  let resolution = variant.height ? `${variant.height}p` : (stream.quality || 'Source');
+  if (variant.height === 2160) resolution += ' (4K)';
+  const bitrate = variant.bitrate ? ` · ${(variant.bitrate / 1000000).toFixed(variant.bitrate >= 10000000 ? 0 : 1)} Mbps` : '';
+  return resolution + bitrate;
+}
 
-  const time = s.ts ? new Date(s.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+function streamQualityShort(variant, stream) {
+  let quality = variant.height ? `${variant.height}p` : (stream.quality || 'Source');
+  if (variant.height === 2160) quality += ' (4K)';
+  return quality;
+}
 
-  const variants = Array.isArray(s.variants) && s.variants.length ? s.variants : [{ id: '', width: 0, height: 0, bitrate: 0, codecs: '', container: s.type }];
-  const optionsHTML = variants.map((v, i) => {
-    const resolution = v.height ? `${v.height}p (${v.width}×${v.height})` : (s.quality || 'Source');
-    const bitrate = v.bitrate ? ` · ${(v.bitrate / 1000000).toFixed(v.bitrate >= 10000000 ? 0 : 1)} Mbps` : '';
-    const codecs = v.codecs ? ` · ${v.codecs}` : '';
-    return `<option value="${escHtml(v.id)}" ${i === 0 ? 'selected' : ''}>${resolution}${bitrate}${codecs}</option>`;
+function streamQualityOption(variant, stream) {
+  const quality = streamQualityShort(variant, stream);
+  const bitrate = variant.bitrate ? ` · ${(variant.bitrate / 1000000).toFixed(variant.bitrate >= 10000000 ? 0 : 1)} Mbps` : '';
+  return quality + bitrate;
+}
+
+function streamCard(stream, index) {
+  const waitingForVariants = ['HLS', 'DASH'].includes(stream.type) && stream.parsing;
+  const variants = Array.isArray(stream.variants) && stream.variants.length ? stream.variants : [{ id: '', width: 0, height: 0, bitrate: 0 }];
+  // Match VDown: every media type uses a short local OPFS preview generated by
+  // the worker. A popup video must not rely on a cross-origin media URL.
+  const preview = stream.previewUrl || '';
+  const poster = stream.thumbnailUrl || '';
+  // VDown permits another hover to retry a transient worker/network failure.
+  const needsPreview = !stream.previewFile;
+  const previewHtml = `<video class="stream-preview" muted loop playsinline preload="metadata" ${preview ? `src="${escHtml(preview)}"` : ''} ${poster ? `poster="${escHtml(poster)}"` : ''} data-preview-file="${escHtml(stream.previewFile || '')}" data-needs-preview="${needsPreview ? 'true' : 'false'}" data-stream-url="${escHtml(stream.url)}"></video>`;
+  const selectedLabel = waitingForVariants ? 'Reading qualities…' : streamQualityShort(variants[0], stream);
+  const options = waitingForVariants ? '' : variants.map((variant, optionIndex) => {
+    const shortLabel = streamQualityShort(variant, stream);
+    return `<button type="button" class="stream-quality-option ${optionIndex === 0 ? 'active' : ''}" data-variant-id="${escHtml(variant.id)}" data-short-label="${escHtml(shortLabel)}">${escHtml(streamQualityOption(variant, stream))}</button>`;
   }).join('');
-  const parsing = s.parsing ? '<span style="font-size:10px;color:var(--text3)">Reading manifest…</span>' : '';
-  const error = s.manifestError ? `<span style="font-size:10px;color:var(--red)">${escHtml(s.manifestError)}</span>` : '';
-
-  return `<div class="yt-quality-row" style="flex-direction:column;align-items:flex-start;gap:3px;cursor:default;padding:8px 10px">
-    <div style="display:flex;align-items:center;gap:6px;width:100%">
-      ${typeBadge(s.type)}${qualBadge}
-      <span style="font-size:11px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(s.name)}">${escHtml(s.name)}</span>
-      <select class="quality-select" id="quality-select-${idx}" style="margin-left:4px;">
-        ${optionsHTML}
-      </select>
-      <button class="btn btn-primary download-btn" style="font-size:11px;padding:3px 10px;white-space:nowrap"
-        data-url="${escHtml(s.url)}" data-idx="${idx}" ${s.parsing ? 'disabled' : ''}>
-        ⬇ Download
-      </button>
+  const rows = `<div class="stream-variant">
+      <div class="stream-quality-wrap">
+        <button type="button" class="stream-quality-picker" data-stream-index="${index}" data-variant-id="${escHtml(variants[0].id)}" aria-label="Available qualities" ${waitingForVariants ? 'disabled' : ''}>${escHtml(selectedLabel)}</button>
+        <div class="stream-quality-menu">${options}</div>
+      </div>
+      <button class="btn btn-primary stream-download" data-url="${escHtml(stream.url)}" data-stream-index="${index}" ${waitingForVariants ? 'disabled' : ''}>Download</button>
+    </div>`;
+  return `<section class="stream-card">
+    <div class="stream-card-head">${previewHtml}
+      <div class="stream-card-info">
+        <div class="stream-card-title-line">${typeBadge(stream.type)}<span class="stream-title" title="${escHtml(stream.name)}">${escHtml(stream.name)}</span></div>
+        <div class="stream-variants">${rows}</div>
+      </div>
     </div>
-    <div style="font-size:10px;color:var(--text3);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width=100%" title="${escHtml(s.url)}">${escHtml(display)}</div>
-    ${parsing}${error}
-    ${time ? `<div style="font-size:10px;color:var(--text3)">Detected at ${time}</div>` : ''}
-  </div>`;
+  </section>`;
 }
 
 // ── Instagram probing ─────────────────────────────────────────────────────────
@@ -1478,10 +1552,36 @@ async function startDownload({ url, action, platform, title, options = {}, prior
 
 // ── Queue rendering ───────────────────────────────────────────────────────────
 async function loadQueue() {
+  // Render cached session data synchronously. This makes Queue usable even
+  // while the background worker or optional local server is waking up.
+  mergeQueues();
+  renderQueue();
+  updateQueueBadge();
+  const offline = await new Promise(resolve => chrome.runtime.sendMessage({ type: 'GET_OFFLINE_STREAM_QUEUE' }, response => resolve(response?.queue || state.offlineQueue || [])));
+  state.offlineQueue = offline;
+  mergeQueues();
+  renderQueue();
+  updateQueueBadge();
+  // Do not block the Stream queue on a stopped local server. Server items are
+  // merged in later if that optional connection responds.
   try {
-    state.queue = await api('GET', '/queue');
+    state.serverQueue = await api('GET', '/queue');
+    mergeQueues();
     renderQueue();
     updateQueueBadge();
+  } catch { state.serverQueue = []; }
+}
+
+function mergeQueues() {
+  state.queue = [...(state.offlineQueue || []), ...(state.serverQueue || [])].sort((a, b) => (b.createdAt || b.addedAt || 0) - (a.createdAt || a.addedAt || 0));
+}
+
+async function hydrateOfflineQueue() {
+  try {
+    const cached = await chrome.storage.session.get('grabit_offline_stream_queue_v1');
+    state.offlineQueue = cached.grabit_offline_stream_queue_v1 || [];
+    mergeQueues();
+    if (state.activeTab === 'queue') { renderQueue(); updateQueueBadge(); }
   } catch {}
 }
 
@@ -1535,7 +1635,7 @@ function renderQueue() {
         <div class="progress-bar ${isDone ? 'complete' : ''}" style="width:${isDone ? 100 : pct}%"></div>
       </div>
       <div class="qi-meta">
-        <span class="qi-speed">${[item.progress?.speed, item.progress?.eta ? `ETA ${item.progress.eta}` : ''].filter(Boolean).join(' · ')}</span>
+        <span class="qi-speed">${item.progress?.detail || [item.progress?.speed, item.progress?.eta ? `ETA ${item.progress.eta}` : ''].filter(Boolean).join(' · ')}</span>
         <span class="qi-percent">${item.progress?.percent || 0}%</span>
       </div>
       ${item.error ? `<div style="font-size:11px;color:var(--red);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${item.error}">${item.error}</div>` : ''}
@@ -1555,9 +1655,14 @@ function renderQueue() {
     btn.addEventListener('click', async () => {
       const action = btn.dataset.qaction;
       const id = btn.dataset.id;
-      if (action === 'cancel') { await api('POST', `/queue/${id}/cancel`); }
-      if (action === 'retry') { await api('POST', `/queue/${id}/retry`); }
-      if (action === 'remove') { await api('DELETE', `/queue/${id}`); }
+      const item = state.queue.find(entry => entry.id === id);
+      if (item?.source === 'stream') {
+        if (action === 'cancel' || action === 'remove') await new Promise(resolve => chrome.runtime.sendMessage({ type: 'OFFLINE_STREAM_QUEUE_ACTION', action, id }, resolve));
+      } else {
+        if (action === 'cancel') { await api('POST', `/queue/${id}/cancel`); }
+        if (action === 'retry') { await api('POST', `/queue/${id}/retry`); }
+        if (action === 'remove') { await api('DELETE', `/queue/${id}`); }
+      }
       if (action === 'open-file') { await api('POST', '/download/open-file', { filePath: btn.dataset.file }); }
       if (action === 'open-folder') { await api('POST', '/download/open-folder', { folderPath: btn.dataset.folder, filePath: btn.dataset.file }); }
       loadQueue();
@@ -1566,7 +1671,10 @@ function renderQueue() {
 
   // Clear completed
   document.getElementById('clear-completed-btn').onclick = async () => {
-    await api('POST', '/queue/clear-completed');
+    await Promise.all([
+      api('POST', '/queue/clear-completed').catch(() => {}),
+      new Promise(resolve => chrome.runtime.sendMessage({ type: 'OFFLINE_STREAM_QUEUE_ACTION', action: 'clear-completed' }, resolve))
+    ]);
     loadQueue();
   };
 }
@@ -2031,6 +2139,9 @@ function initSettingsTabs() {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
+  // Start this before the health check; Stream downloads do not depend on the
+  // local server and must be visible immediately when the popup opens offline.
+  hydrateOfflineQueue();
   initTabs();
   initSettingsTabs();
   initURLInputMode();
@@ -2048,8 +2159,9 @@ async function init() {
 
     // Detect current tab
     await detectCurrentTab();
-    loadQueue();
   }
+  // Always load the browser-owned Stream queue, online or offline.
+  loadQueue();
 
   const refreshBtn = document.getElementById('streams-refresh');
   if (refreshBtn) {

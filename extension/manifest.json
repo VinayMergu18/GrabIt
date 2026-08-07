@@ -11,7 +11,9 @@
     "webRequest",
     "scripting",
     "cookies",
-    "downloads"
+    "downloads",
+    "offscreen",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "http://127.0.0.1:7272/*",
@@ -19,6 +21,9 @@
   ],
   "background": {
     "service_worker": "scripts/background/sw.js"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'"
   },
   "content_scripts": [
     {
@@ -43,7 +48,7 @@
         "scripts/content/detectors/generic.js"
       ],
       "run_at": "document_idle",
-      "all_frames": false
+      "all_frames": true
     },
     {
       "all_frames": true,

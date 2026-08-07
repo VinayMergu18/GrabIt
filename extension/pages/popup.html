@@ -34,7 +34,7 @@
   }
 
   html { font-family: var(--font); font-size: 13px; }
-  body { background: var(--bg); color: var(--text); width: 400px; min-height: 460px; max-height: 600px; display: flex; flex-direction: column; overflow: hidden; }
+  body { background: var(--bg); color: var(--text); width: 400px; height: 560px; min-height: 560px; max-height: 560px; display: flex; flex-direction: column; overflow: hidden; }
 
   /* ── Header ───────────────────────────────────────────────────── */
   #header {
@@ -54,6 +54,7 @@
   }
   #server-dot.online { background: var(--green); }
   #server-dot.offline { background: var(--red); }
+  #server-label { display:inline-block; min-width:44px; text-align:right; }
 
   /* ── Tab bar ──────────────────────────────────────────────────── */
   #tabs {
@@ -205,6 +206,25 @@
   .yt-quality-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--radius); background: var(--bg3); border: 1px solid var(--border); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; transition: all var(--transition); width: 100%; text-align: left; }
   .yt-quality-row:hover:not(:disabled) { background: var(--bg4); border-color: var(--accent); }
   .yt-quality-row:active:not(:disabled) { transform: scale(0.99); }
+
+  /* Stream tab: compact preview with VDown-style hover playback. */
+  .stream-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius); margin:7px 0; overflow:hidden; }
+  .stream-card.quality-open { overflow:visible; position:relative; z-index:2; }
+  .stream-card-head { display:flex; align-items:stretch; gap:8px; padding:7px 8px; min-width:0; }
+  .stream-preview { width:80; height:70px; flex:0 0 130px; background:#000; object-fit:cover; border-radius:4px; }
+  .stream-card-info { min-width:0; flex:1; display:flex; flex-direction:column; justify-content:space-between; }
+  .stream-card-title-line { display:flex; align-items:flex-start; gap:5px; min-width:0; }
+  .stream-title { min-width:0; flex:1; font-size:11px; font-weight:600; line-height:1.35; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+  .stream-variants { margin-top:5px; }
+  .stream-variant { display:flex; align-items:center; gap:4px; min-height:31px; }
+  .stream-quality-wrap { position:relative; width:155px; height:31px; flex:0 0 155px; }
+  .stream-quality-picker { width:155px; height:31px; padding:3px 7px; border:1px solid var(--border); border-radius:4px; background:var(--bg3); color:var(--text); font:inherit; font-size:11px; text-align:left; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .stream-quality-picker:focus, .stream-quality-picker:hover { outline:none; border-color:var(--accent); }
+  .stream-quality-menu { display:none; position:absolute; top:35px; left:0; width:220px; max-height:190px; overflow-y:auto; padding:3px; border:1px solid var(--accent); border-radius:4px; background:var(--bg2); box-shadow:0 8px 20px rgba(0,0,0,.35); z-index:10; }
+  .stream-quality-wrap.open .stream-quality-menu { display:block; }
+  .stream-quality-option { display:block; width:100%; padding:6px 7px; border:0; border-radius:3px; background:transparent; color:var(--text); text-align:left; font:inherit; font-size:11px; cursor:pointer; white-space:nowrap; }
+  .stream-quality-option:hover, .stream-quality-option.active { background:var(--bg4); color:var(--accent); }
+  .stream-download { width:58px; justify-content:center; flex:0 0 58px; padding:3px 2px; font-size:10px; white-space:nowrap; }
   .yt-q-idx { font-family: var(--mono, monospace); font-size: 10.5px; color: var(--text3); min-width: 20px; }
   .yt-q-label { flex: 1; font-weight: 500; }
   .yt-q-size { font-size: 11px; color: var(--text2); }
