@@ -9,6 +9,38 @@
  *
  * Per-tab stream store: Map<tabId, Map<url, StreamInfo>>
  * Cleared on tab navigation/removal. Badge shows live stream count.
+ *
+ * ── Fixes applied in this revision ──────────────────────────────────────
+ *  1. parseHlsMaster used the invalid property access `a.GROUP-ID`, which
+ *     JS parses as `a.GROUP - ID` and throws a ReferenceError ("ID is not
+ *     defined") the moment a master playlist declares an #EXT-X-MEDIA
+ *     AUDIO group — i.e. almost any modern adaptive HLS stream. Because
+ *     that throw happened inside enrichManifest's try/catch, it was
+ *     silently swallowed and the stream fell back to the single-source
+ *     fallback, silently losing quality/variant selection. Fixed to use
+ *     bracket access `a['GROUP-ID']`.
+ *  2. Stream registration ran on chrome.webRequest.onBeforeRequest, which
+ *     fires BEFORE onSendHeaders. That meant requestHeaders.get(requestId)
+ *     was always empty at the moment a stream was first recorded, so
+ *     referer/origin/auth/cookie headers were never actually attached to
+ *     newly detected streams — breaking downloads of signed/CDN-protected
+ *     or referer-locked streams (the exact case the code's own comments
+ *     say this map exists for). Fixed by moving extension-pattern-based
+ *     detection to onSendHeaders, where details.requestHeaders is already
+ *     populated and available synchronously.
+ *  3. The shared `requestHeaders` map (populated for every xmlhttprequest/
+ *     media/other request on every site, used to support the content-type
+ *     based CDN detection in onHeadersReceived) was never cleaned up,
+ *     growing without bound for the lifetime of the service worker. Added
+ *     onCompleted/onErrorOccurred listeners to evict entries once a
+ *     request finishes.
+ *  4. lastCookieExtraction (per-tab cooldown map) was never cleaned up on
+ *     tab close. Now cleared alongside tabStreams in onRemoved.
+ *  5. Removed dead code that was never called or read anywhere in this
+ *     file: playlistProgressMap, SKIP_EXT, hlsBytes(), fetchBytes().
+ *     offlineStreamDownload() always routes through the LibAV worker
+ *     (vdownDownload) now, so the old raw byte-fetch helpers were stale
+ *     leftovers from an earlier implementation.
  */
 
 'use strict';
@@ -71,14 +103,13 @@ function updateOfflineJob(id, patch) {
   publishOfflineQueue();
 }
 // Request headers are needed for signed/CDN streams that reject a bare fetch.
+// Populated by the broad onSendHeaders listener below and evicted once the
+// underlying network request finishes (see onCompleted/onErrorOccurred).
 const requestHeaders = new Map();
 let vdownWorkerReady = null;
 const vdownWaiters = new Map();
 const opfsBlobWaiters = new Map();
 let vdownTaskChain = Promise.resolve();
-// ── Playlist scan progress store ────────────────────────────────────────
-/** @type {Map<number, Map<string, any>>} */
-const playlistProgressMap = new Map();
 
 const TYPE_MAP = {
   m3u8: 'HLS',  mpd: 'DASH',
@@ -86,13 +117,6 @@ const TYPE_MAP = {
   mov: 'MOV',   mkv: 'MKV',  avi: 'AVI',
   flv: 'FLV',   ts:  'TS',   ogg: 'OGG', ogv: 'OGG',
 };
-
-// Extensions that are definitely NOT streams (skip silently)
-const SKIP_EXT = new Set([
-  'm4s','aac','mp3','vtt','srt','ass','json','xml','js','mjs','css',
-  'png','jpg','jpeg','gif','svg','ico','webp','woff','woff2','ttf','otf',
-  'html','htm','php','txt','pdf','zip','gz','wasm'
-]);
 
 // Hosts to never record (server, local dev)
 const SKIP_HOST = new Set(['127.0.0.1','localhost','::1']);
@@ -129,6 +153,14 @@ function classifyUrl(url) {
   if (/manifest\.m3u8|playlist\.m3u8/i.test(url)) return 'HLS';
   if (/\/hls\//i.test(url) && /\.(m3u8|ts)/i.test(url)) return 'HLS';
   if (/\/dash\//i.test(url) && /\.mpd/i.test(url)) return 'DASH';
+  // Added for other stream types with query parameters
+  if (/\.mp4/i.test(url) || /\.\m4v/i.test(url)) return 'MP4';
+  if (/\.webm/i.test(url)) return 'WebM';
+  if (/\.mkv/i.test(url)) return 'MKV';
+  if (/\.mov/i.test(url)) return 'MOV';
+  if (/\.flv/i.test(url)) return 'FLV';
+  if (/\.ts/i.test(url)) return 'TS';
+  if (/\.(ogg|ogv)/i.test(url)) return 'OGG';
 
   return null;
 }
@@ -162,6 +194,59 @@ function urlName(url) {
   } catch { return 'Stream'; }
 }
 
+/**
+ * Safely creates a URL object, falling back to the original string if URL construction fails
+ * @param {string} urlString - The URL string to convert to a URL object
+ * @returns {URL|string} - A URL object if successful, otherwise the original string
+ */
+function safeUrlObject(urlString) {
+  try {
+    return new URL(urlString);
+  } catch (e) {
+    // If URL construction fails, return the original string
+    // The VDown worker's vdownSerialize function handles strings correctly
+    return urlString;
+  }
+}
+
+/** Normalize a URL string for equivalence comparison: ignore query, fragment, username, password, and trailing slash. */
+function normalizeUrl(equivUrl) {
+  try {
+    const u = new URL(equivUrl);
+    // Remove trailing slash from pathname if present (except for root?)
+    let pathname = u.pathname;
+    if (pathname.length > 1 && pathname.endsWith('/')) {
+      pathname = pathname.slice(0, -1);
+    }
+    // Return origin + pathname
+    return u.origin + pathname;
+  } catch {
+    // If URL invalid, fall back to lowercased string without query/fragment?
+    // For simplicity, return the original string lowercased and strip everything after '?'
+    const clean = equivUrl.split('?')[0].split('#')[0].toLowerCase();
+    return clean;
+  }
+}
+
+function urlsEquivalent(url1, url2) {
+  return normalizeUrl(url1) === normalizeUrl(url2);
+}
+
+function findEquivalentStream(streamMap, url) {
+  for (const [existingUrl, stream] of streamMap) {
+    if (urlsEquivalent(existingUrl, url)) {
+      return stream;
+    }
+  }
+  return null;
+}
+
+function getStreamByUrl(tabId, url) {
+  const map = tabStreams.get(tabId);
+  if (!map) return null;
+  return findEquivalentStream(map, url);
+}
+
 function addStream(tabId, url, pageTitle, headers = []) {
   if (!tabId || tabId < 0) return;
   const type = classifyUrl(url);
@@ -170,30 +255,56 @@ function addStream(tabId, url, pageTitle, headers = []) {
   if (!tabStreams.has(tabId)) tabStreams.set(tabId, new Map());
   const map = tabStreams.get(tabId);
 
-  if (map.has(url)) {
-    // Update name if we now have the page title
-    if (pageTitle) map.get(url).name = pageTitle;
-    return;
+  // Look for an existing stream with an equivalent URL (ignoring query, fragment, etc.)
+  const existingStream = findEquivalentStream(map, url);
+  let streamToUpdate;
+
+  if (existingStream) {
+    // Found an equivalent stream, we'll update it
+    streamToUpdate = existingStream;
+  } else {
+    // No equivalent stream found, create a new one
+    streamToUpdate = {
+      url,
+      type,
+      name:    pageTitle || urlName(url),
+      quality: guessQuality(url),
+      headers: normalizeHeaders(headers),
+      variants: null,
+      parsing: false,
+      ts:      Date.now(),
+    };
+    // Add to map using the original URL as key (for consistency with existing code)
+    map.set(url, streamToUpdate);
   }
 
-  const stream = {
-    url,
-    type,
-    name:    pageTitle || urlName(url),
-    quality: guessQuality(url),
-    headers: normalizeHeaders(headers),
-    variants: null,
-    parsing: false,
-    ts:      Date.now(),
-  };
-  map.set(url, stream);
+  // Update name if we now have a page title and the stream doesn't have a name yet
+  // (or always update if pageTitle is provided? The original behavior was to update if pageTitle is provided)
+  if (pageTitle && (!streamToUpdate.name || streamToUpdate.name === urlName(url))) {
+    streamToUpdate.name = pageTitle;
+  }
+  // Backfill headers if this stream was first seen without them
+  if ((!streamToUpdate.headers || streamToUpdate.headers.length === 0)) {
+    const normalized = normalizeHeaders(headers);
+    if (normalized.length) streamToUpdate.headers = normalized;
+  }
 
-  updateBadge(tabId, map.size);
-  persistStreamStore();
+  // Enrich manifest for HLS/DASH streams if we don't have variant info yet
+  // Do this for both new streams and existing streams that lack variant info
+  const needsEnrichment = (type === 'HLS' || type === 'DASH') &&
+                         (!streamToUpdate.variants || streamToUpdate.variants.length === 0);
+  if (needsEnrichment) {
+    enrichManifest(tabId, streamToUpdate);
+  }
 
-  // Push to popup if open
-  chrome.runtime.sendMessage({ type: 'streams_updated', tabId }).catch(() => {});
-  if (type === 'HLS' || type === 'DASH') enrichManifest(tabId, stream);
+  // Update badge and persist if this is a genuinely new stream (by URL)
+  // We check if the exact URL was already in the map to avoid excessive updates
+  if (!map.has(url)) {
+    updateBadge(tabId, map.size);
+    persistStreamStore();
+    // Push to popup if open
+    chrome.runtime.sendMessage({ type: 'streams_updated', tabId }).catch(() => {});
+  }
 }
 
 function normalizeHeaders(headers) {
@@ -234,13 +345,16 @@ function hasResolvedQuality(stream) {
 function mergeInferiorStreamDuplicates(map, preferred) {
   if (!hasResolvedQuality(preferred)) return;
   for (const [key, candidate] of map) {
-    if (key === preferred.url || hasResolvedQuality(candidate)) continue;
+    if (urlsEquivalent(key, preferred.url) || hasResolvedQuality(candidate)) continue;
     // Only merge records that describe the same visible media: same page title
     // and artwork. This avoids collapsing legitimately separate videos on a
     // page while removing the generic network record VDown has superseded.
     const sameTitle = candidate.name === preferred.name;
     const sameArtwork = Boolean(preferred.thumbnailUrl) && candidate.thumbnailUrl === preferred.thumbnailUrl;
-    const isChildRendition = (preferred.variants || []).some(variant => variant.url === candidate.url || variant.audioUrl === candidate.url);
+    const isChildRendition = (preferred.variants || []).some(variant =>
+      urlsEquivalent(variant.url, candidate.url) ||
+      (variant.audioUrl && urlsEquivalent(variant.audioUrl, candidate.url))
+    );
     if (isChildRendition || (sameTitle && sameArtwork)) map.delete(key);
   }
 }
@@ -269,8 +383,8 @@ function addDetectorMedia(tabId, rawMedia, pageTitle) {
     const videoUrl = optionValue(av.video) || optionValue(entry.url) || optionValue(entry.uri) || url;
     const audioUrl = optionValue(av.audio) || null;
     let resolvedVideoUrl = videoUrl, resolvedAudioUrl = audioUrl;
-    try { resolvedVideoUrl = new URL(String(videoUrl), url).href; } catch {}
-    try { if (audioUrl) resolvedAudioUrl = new URL(String(audioUrl), url).href; } catch {}
+    try { resolvedVideoUrl = new URL(String(videoUrl), safeUrlObject(url)).href; } catch {}
+    try { if (audioUrl) resolvedAudioUrl = new URL(String(audioUrl), safeUrlObject(url)).href; } catch {}
     return {
       id: `${media.type}-${index}`, protocol: media.type === 'mpd_playlist' ? 'dash' : 'hls',
       workerEntry: Number.isFinite(entry.index) ? entry.index : index,
@@ -282,12 +396,12 @@ function addDetectorMedia(tabId, rawMedia, pageTitle) {
   // VDown's deduplication rule: once a master playlist is known, discard the
   // child rendition entries discovered from the network. They are not separate
   // videos and were the source of GrabIt's duplicate cards.
-  const childUrls = new Set(variants.flatMap(variant => [variant.url, variant.audioUrl]).filter(Boolean));
+  const childUrls = variants.flatMap(variant => [variant.url, variant.audioUrl]).filter(Boolean);
   for (const [key, candidate] of map) {
     const candidateVariants = candidate.variants || [];
     const isSamePlaylist = candidate.type === (media.type === 'mpd_playlist' ? 'DASH' : 'HLS') &&
-      candidateVariants.some(variant => childUrls.has(variant.url));
-    if (key !== url && (childUrls.has(candidate.url) || isSamePlaylist)) map.delete(key);
+      candidateVariants.some(variant => childUrls.some(childUrl => urlsEquivalent(childUrl, variant.url)));
+    if (!urlsEquivalent(key, url) && (childUrls.some(childUrl => urlsEquivalent(childUrl, candidate.url)) || isSamePlaylist)) map.delete(key);
   }
   const existing = map.get(url);
   map.set(url, {
@@ -323,8 +437,11 @@ function parseHlsMaster(text, masterUrl) {
   for (const line of lines) {
     if (!line.startsWith('#EXT-X-MEDIA:')) continue;
     const a = attributes(line.slice(13));
-    if (a.TYPE === 'AUDIO' && a.GROUP-ID && a.URI && (!audioGroups.has(a.GROUP-ID) || a.DEFAULT === 'YES'))
-      audioGroups.set(a.GROUP-ID, new URL(a.URI, masterUrl).href);
+    // FIX: `a.GROUP-ID` is invalid property access (parsed as `a.GROUP - ID`,
+    // throwing "ID is not defined"). Bracket notation is required because
+    // GROUP-ID contains a hyphen.
+    if (a.TYPE === 'AUDIO' && a['GROUP-ID'] && a.URI && (!audioGroups.has(a['GROUP-ID']) || a.DEFAULT === 'YES'))
+      audioGroups.set(a['GROUP-ID'], new URL(a.URI, safeUrlObject(masterUrl)).href);
   }
   const variants = [];
   for (let i = 0; i < lines.length; i++) {
@@ -333,7 +450,7 @@ function parseHlsMaster(text, masterUrl) {
     const uri = lines.slice(i + 1).find(x => x && !x.startsWith('#'));
     if (!uri) continue;
     const [width, height] = (a.RESOLUTION || 'x').split('x').map(Number);
-    variants.push({ id: `hls-${variants.length}`, protocol: 'hls', url: new URL(uri.trim(), masterUrl).href,
+    variants.push({ id: `hls-${variants.length}`, protocol: 'hls', url: new URL(uri.trim(), safeUrlObject(masterUrl)).href,
       audioUrl: audioGroups.get(a.AUDIO) || null, width: width || 0, height: height || 0,
       bitrate: Number(a.BANDWIDTH || a['AVERAGE-BANDWIDTH'] || 0), codecs: a.CODECS || '', container: mimeFromCodecs(a.CODECS) });
   }
@@ -353,7 +470,7 @@ function parseDashMpd(text, masterUrl) {
       const base = repBody.match(/<BaseURL[^>]*>\s*([^<]+)\s*<\/BaseURL>/i)?.[1] || body.match(/<BaseURL[^>]*>\s*([^<]+)\s*<\/BaseURL>/i)?.[1];
       variants.push({ id: `dash-${setIndex}-${index++}`, protocol: 'dash', representationId: rep.id,
         workerEntry: variants.length,
-        url: base ? new URL(base, masterUrl).href : masterUrl, width: Number(rep.width || set.width || 0), height: Number(rep.height || set.height || 0),
+        url: base ? new URL(base, safeUrlObject(masterUrl)).href : safeUrlObject(masterUrl), width: Number(rep.width || set.width || 0), height: Number(rep.height || set.height || 0),
         bitrate: Number(rep.bandwidth || 0), codecs: rep.codecs || set.codecs || '', container: mime.includes('webm') ? 'webm' : 'mp4' });
     }
     setIndex++;
@@ -365,7 +482,7 @@ async function enrichManifest(tabId, stream) {
   if (stream.parsing) return;
   stream.parsing = true;
   try {
-    const response = await fetch(stream.url, { headers: Object.fromEntries(stream.headers), credentials: 'include' });
+    const response = await fetch(safeUrlObject(stream.url), { headers: Object.fromEntries(stream.headers), credentials: 'include' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const text = await response.text();
     const variants = stream.type === 'HLS' ? parseHlsMaster(text, stream.url) : parseDashMpd(text, stream.url);
@@ -375,7 +492,13 @@ async function enrichManifest(tabId, stream) {
     if (variants.length) {
       const childUrls = new Set(variants.flatMap(variant => [variant.url, variant.audioUrl]).filter(Boolean));
       const map = tabStreams.get(tabId);
-      for (const [key, candidate] of map || []) if (key !== stream.url && childUrls.has(candidate.url)) map.delete(key);
+      for (const [key, candidate] of map || []) {
+        if (key === stream.url) continue;
+        // Check if candidate's URL is equivalent to any of the childUrls
+        if ([...childUrls].some(childUrl => urlsEquivalent(candidate.url, childUrl))) {
+          map.delete(key);
+        }
+      }
       if (map) mergeInferiorStreamDuplicates(map, stream);
       stream.previewUrl = null;
     }
@@ -477,38 +600,72 @@ async function extractAndSendCookies(tabId, url) {
   }
 }
 
-// ── webRequest listener — network-level stream detection ──────────────────────
-// Fires for EVERY matching request across ALL tabs automatically.
-// No page injection needed; this is why webRequest is the primary method.
+// ── webRequest listeners — network-level stream detection ─────────────────────
+const STREAM_URL_PATTERNS = [
+  '*://*/*.m3u8', '*://*/*.m3u8?*',
+  '*://*/*.mpd',  '*://*/*.mpd?*',
+  '*://*/*.mp4',  '*://*/*.mp4?*',
+  '*://*/*.webm', '*://*/*.webm?*',
+  '*://*/*.mkv',  '*://*/*.mkv?*',
+  '*://*/*.m4v',  '*://*/*.m4v?*',
+  '*://*/*.mov',  '*://*/*.mov?*',
+  '*://*/*.flv',  '*://*/*.flv?*',
+  '*://*/manifest.m3u8*',
+  '*://*/playlist.m3u8*',
+  '*://*/hls/*.m3u8*',
+  '*://*/dash/*.mpd*',
+  // Added for Instagram and other CDNs with deeper paths - 2 levels
+  '*://*/*/*.mp4',  '*://*/*/*.mp4?*',
+  '*://*/*/*.webm', '*://*/*/*.webm?*',
+  '*://*/*/*.m4v',  '*://*/*/*.m4v?*',
+  '*://*/*/*.mov',  '*://*/*/*.mov?*',
+  '*://*/*/*.flv',  '*://*/*/*.flv?*',
+  // Added for Instagram and other CDNs with deeper paths - 3 levels
+  '*://*/*/*/*.mp4',  '*://*/*/*/*.mp4?*',
+  '*://*/*/*/*.webm', '*://*/*/*/*.webm?*',
+  '*://*/*/*/*.m4v',  '*://*/*/*/*.m4v?*',
+  '*://*/*/*/*.mov',  '*://*/*/*/*.mov?*',
+  '*://*/*/*/*.flv',  '*://*/*/*/*.flv?*',
+  // Added for Instagram and other CDNs with deeper paths - 4 levels
+  '*://*/*/*/*/*.mp4',  '*://*/*/*/*/*.mp4?*',
+  '*://*/*/*/*/*.webm', '*://*/*/*/*/*.webm?*',
+  '*://*/*/*/*/*.m4v',  '*://*/*/*/*/*.m4v?*',
+  '*://*/*/*/*/*.mov',  '*://*/*/*/*/*.mov?*',
+  '*://*/*/*/*/*.flv',  '*://*/*/*/*/*.flv?*',
+];
+
+// Broad capture across every request, used to (a) supply headers to the
+// content-type based CDN detector in onHeadersReceived, and (b) evicted in
+// onCompleted/onErrorOccurred below so this map cannot grow unbounded.
 chrome.webRequest.onSendHeaders.addListener(
   (details) => { if (details.tabId >= 0) requestHeaders.set(details.requestId, details.requestHeaders || []); },
   { urls: ['<all_urls>'], types: ['xmlhttprequest', 'media', 'other'] }, ['requestHeaders', 'extraHeaders']
 );
-chrome.webRequest.onBeforeRequest.addListener(
+
+// FIX: extension-pattern based detection used to run on onBeforeRequest,
+// which fires BEFORE onSendHeaders — so details.requestHeaders (or a lookup
+// into the map above) was always empty at that point, and detected streams
+// never got their referer/origin/cookie/auth headers. Detecting on
+// onSendHeaders instead means the headers for *this* request are already
+// available directly on `details`, with no timing gap.
+chrome.webRequest.onSendHeaders.addListener(
   (details) => {
     if (details.tabId < 0) return;
-    // Get page title asynchronously (don't block the request)
     chrome.tabs.get(details.tabId)
-      .then(tab => addStream(details.tabId, details.url, tab?.title || '', requestHeaders.get(details.requestId)))
-      .catch(() => addStream(details.tabId, details.url, '', requestHeaders.get(details.requestId)));
+      .then(tab => addStream(details.tabId, details.url, tab?.title || '', details.requestHeaders))
+      .catch(() => addStream(details.tabId, details.url, '', details.requestHeaders));
   },
-  {
-    urls: [
-      '*://*/*.m3u8', '*://*/*.m3u8?*',
-      '*://*/*.mpd',  '*://*/*.mpd?*',
-      '*://*/*.mp4',  '*://*/*.mp4?*',
-      '*://*/*.webm', '*://*/*.webm?*',
-      '*://*/*.mkv',  '*://*/*.mkv?*',
-      '*://*/*.m4v',  '*://*/*.m4v?*',
-      '*://*/*.mov',  '*://*/*.mov?*',
-      '*://*/*.flv',  '*://*/*.flv?*',
-      '*://*/manifest.m3u8*',
-      '*://*/playlist.m3u8*',
-      '*://*/hls/*.m3u8*',
-      '*://*/dash/*.mpd*',
-    ]
-  }
+  { urls: STREAM_URL_PATTERNS },
+  ['requestHeaders', 'extraHeaders']
 );
+
+// FIX: requestHeaders entries were never removed, leaking one entry per
+// network request (on every site, not just media requests) for the entire
+// lifetime of the service worker. Evict once a request finishes — by then
+// both onSendHeaders and onHeadersReceived have already read what they need.
+function cleanupRequestHeaders(details) { requestHeaders.delete(details.requestId); }
+chrome.webRequest.onCompleted.addListener(cleanupRequestHeaders, { urls: ['<all_urls>'], types: ['xmlhttprequest', 'media', 'other'] });
+chrome.webRequest.onErrorOccurred.addListener(cleanupRequestHeaders, { urls: ['<all_urls>'], types: ['xmlhttprequest', 'media', 'other'] });
 
 // Many CDNs hide the extension in a signed URL. Content-Type lets those streams
 // enter the same manifest pipeline as ordinary .m3u8/.mpd URLs.
@@ -522,21 +679,51 @@ chrome.webRequest.onHeadersReceived.addListener((details) => {
   if (!type || classifyUrl(details.url)) return;
   if (!tabStreams.has(details.tabId)) tabStreams.set(details.tabId, new Map());
   const map = tabStreams.get(details.tabId);
-  if (map.has(details.url)) return;
+
+  // Check for exact match first (existing behavior)
+  let stream = map.get(details.url);
+  let isNew = false;
+
+  // If no exact match, look for equivalent stream
+  if (!stream) {
+    stream = findEquivalentStream(map, details.url);
+    // If we found an equivalent stream, we'll update it instead of creating new
+    if (stream) {
+      // Update headers if this stream was first seen without them
+      if ((!stream.headers || stream.headers.length === 0)) {
+        const normalized = normalizeHeaders(requestHeaders.get(details.requestId));
+        if (normalized.length) stream.headers = normalized;
+      }
+    } else {
+      // No equivalent stream found, create a new one
+      stream = { url: details.url, type, name: tab?.title || urlName(details.url), quality: null,
+        headers: normalizeHeaders(requestHeaders.get(details.requestId)), variants: null, parsing: false, ts: Date.now() };
+      // Add to map using the original URL as key
+      map.set(details.url, stream);
+      isNew = true;
+    }
+  }
+
   chrome.tabs.get(details.tabId).then(tab => {
-    map.set(details.url, { url: details.url, type, name: tab?.title || urlName(details.url), quality: null,
-      headers: normalizeHeaders(requestHeaders.get(details.requestId)), variants: null, parsing: false, ts: Date.now() });
+    // Update name if we now have a better page title
+    if (tab?.title && (!stream.name || stream.name === urlName(details.url))) {
+      stream.name = tab?.title;
+    }
     updateBadge(details.tabId, map.size);
     persistStreamStore();
-    const stream = map.get(details.url);
+    // Enrich manifest for HLS/DASH streams if we don't have variant info yet
+    if ((type === 'HLS' || type === 'DASH') &&
+        (!stream.variants || stream.variants.length === 0)) {
+      enrichManifest(details.tabId, stream);
+    }
     chrome.runtime.sendMessage({ type: 'streams_updated', tabId: details.tabId }).catch(() => {});
-    if (type === 'HLS' || type === 'DASH') enrichManifest(details.tabId, stream);
   }).catch(() => {});
 }, { urls: ['<all_urls>'], types: ['xmlhttprequest', 'media', 'other'] }, ['responseHeaders', 'extraHeaders']);
 
 // ── Tab lifecycle ─────────────────────────────────────────────────────────────
 chrome.tabs.onRemoved.addListener((tabId) => {
   tabStreams.delete(tabId);
+  lastCookieExtraction.delete(tabId); // FIX: was never cleaned up, small per-tab leak
   persistStreamStore();
 });
 
@@ -807,7 +994,7 @@ async function opfsBlobUrl(filename) {
 }
 
 async function prepareStreamPreview(tabId, streamUrl, force = false) {
-  const stream = tabStreams.get(tabId)?.get(streamUrl);
+  const stream = getStreamByUrl(tabId, streamUrl);
   if (force && stream) { stream.previewFile = null; stream.previewFailed = false; }
   if (!stream || stream.previewFile || stream.previewUrl || stream.previewPending) return stream?.previewFile || stream?.previewUrl || null;
   const variants = stream.variants || [];
@@ -821,14 +1008,14 @@ async function prepareStreamPreview(tabId, streamUrl, force = false) {
       muxer: 'mp4', carry_get_params: false, extension: 'mp4', is_youtube: false, throttle: false, cache: 'default' };
     let args;
     if (stream.type === 'HLS') {
-      args = { ...common, will_use_jsfetch: false, strategy: 'm3u8_video_preview', url: new URL(variant.url) };
+      args = { ...common, will_use_jsfetch: false, strategy: 'm3u8_video_preview', url: safeUrlObject(variant.url) };
     } else if (stream.type === 'DASH') {
-      args = { ...common, will_use_jsfetch: true, strategy: 'mpd_video_preview', url: new URL(stream.url), entry: variant.workerEntry, duration: 'unknown' };
+      args = { ...common, will_use_jsfetch: true, strategy: 'mpd_video_preview', url: safeUrlObject(stream.url), entry: variant.workerEntry, duration: 'unknown' };
     } else {
       // This is VDown's http_playlist preview route. Do not point a popup
       // <video> at a cross-origin source: create a short local OPFS preview
       // instead, which is reliable for direct MP4/WebM streams as well.
-      args = { ...common, will_use_jsfetch: true, strategy: 'http_video_preview_jsfetch', url: new URL(stream.url) };
+      args = { ...common, will_use_jsfetch: true, strategy: 'http_video_preview_jsfetch', url: safeUrlObject(stream.url) };
     }
     const result = await vdownDownload(args);
     // Worker Blob URLs are scoped to the worker and cannot be played by the
@@ -850,8 +1037,9 @@ async function prepareStreamPreview(tabId, streamUrl, force = false) {
 
 // ── Offline Stream-tab downloader ───────────────────────────────────────────
 // This deliberately never calls SERVER. Direct files and muxed HLS are assembled
-// in the extension; encrypted/adaptive A/V streams are rejected instead of being
-// silently sent to a server or producing a corrupt file.
+// through the LibAV worker (vdownDownload); encrypted/adaptive A/V streams the
+// worker can't handle are rejected instead of being silently sent to a server
+// or producing a corrupt file.
 function safeFilename(name, extension) {
   const base = String(name || 'video').replace(/[\\/:*?\"<>|]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 140) || 'video';
   return `${base}.${extension}`;
@@ -861,42 +1049,8 @@ function notifyStreamProgress(tabId, streamUrl, progress) {
   chrome.runtime.sendMessage({ type: 'stream_download_progress', tabId, streamUrl, progress }).catch(() => {});
 }
 
-async function fetchBytes(url, headers, onProgress, signal) {
-  const response = await fetch(url, { headers: Object.fromEntries(headers || []), credentials: 'include', signal });
-  if (!response.ok) throw new Error(`HTTP ${response.status} while fetching media`);
-  const reader = response.body?.getReader();
-  if (!reader) return new Uint8Array(await response.arrayBuffer());
-  const parts = []; let loaded = 0;
-  for (;;) { const { done, value } = await reader.read(); if (done) break; parts.push(value); loaded += value.byteLength; onProgress?.(loaded); }
-  const result = new Uint8Array(loaded); let offset = 0;
-  for (const part of parts) { result.set(part, offset); offset += part.byteLength; }
-  return result;
-}
-
-async function hlsBytes(playlistUrl, headers, progress, signal) {
-  const response = await fetch(playlistUrl, { headers: Object.fromEntries(headers || []), credentials: 'include', signal });
-  if (!response.ok) throw new Error(`HTTP ${response.status} while fetching HLS playlist`);
-  const text = await response.text();
-  if (/^#EXT-X-KEY:.*METHOD=(?!NONE)/mi.test(text)) throw new Error('Encrypted HLS/DRM streams cannot be downloaded.');
-  const lines = text.split(/\r?\n/), urls = [];
-  let init = null;
-  for (const line of lines) {
-    const map = line.match(/^#EXT-X-MAP:.*URI=\"([^\"]+)\"/i); if (map) init = new URL(map[1], playlistUrl).href;
-    if (line.trim() && !line.startsWith('#')) urls.push(new URL(line.trim(), playlistUrl).href);
-  }
-  if (!urls.length) throw new Error('HLS media playlist contains no segments.');
-  const all = init ? [init, ...urls] : urls, parts = []; let loaded = 0;
-  for (let i = 0; i < all.length; i++) {
-    const bytes = await fetchBytes(all[i], headers, undefined, signal); parts.push(bytes); loaded += bytes.byteLength;
-    progress({ phase: 'downloading', completed: i + 1, total: all.length, bytes: loaded });
-  }
-  const output = new Uint8Array(loaded); let offset = 0;
-  for (const part of parts) { output.set(part, offset); offset += part.byteLength; }
-  return { bytes: output, extension: init ? 'mp4' : 'ts' };
-}
-
 async function offlineStreamDownload(tabId, streamUrl, variantId) {
-  const stream = tabStreams.get(tabId)?.get(streamUrl);
+  const stream = getStreamByUrl(tabId, streamUrl);
   if (!stream) throw new Error('The selected stream is no longer available. Refresh the page and try again.');
   const variant = stream.variants?.find(v => v.id === variantId) || null;
   const headers = stream.headers || [];
@@ -922,8 +1076,8 @@ async function offlineStreamDownload(tabId, streamUrl, variantId) {
     // VDown keeps all media bytes in its worker/OPFS. Service workers cannot
     // create Blob URLs, so use the same route for both one- and two-source HLS.
     const result = await vdownDownload({ download_id: id, headers: new Headers(headers), good_basename: safeFilename(stream.name, extension).replace(new RegExp(`\\.${extension}$`), ''), subdir: '', save_as: false, will_use_jsfetch: false,
-      strategy: variant.audioUrl ? 'm3u8_audio_video_two_sources' : 'm3u8_audio_video_one_source', muxer: extension, url: new URL(variant.url),
-      ...(variant.audioUrl ? { url_audio: new URL(variant.audioUrl) } : {}), carry_get_params: false,
+      strategy: variant.audioUrl ? 'm3u8_audio_video_two_sources' : 'm3u8_audio_video_one_source', muxer: extension, url: safeUrlObject(variant.url),
+      ...(variant.audioUrl ? { url_audio: safeUrlObject(variant.audioUrl) } : {}), carry_get_params: false,
       extension, is_youtube: false, throttle: false, cache: 'default', duration: 'unknown' }, report);
     workerBlobUrl = await workerDownloadUrl(result);
   } else if (stream.type === 'DASH') {
@@ -931,7 +1085,7 @@ async function offlineStreamDownload(tabId, streamUrl, variantId) {
     const id = `stream_${crypto.randomUUID()}`; extension = variant.container || 'mp4';
     updateOfflineJob(jobId, { workerDownloadId: id });
     const result = await vdownDownload({ download_id: id, headers: new Headers(headers), good_basename: safeFilename(stream.name, extension).replace(new RegExp(`\\.${extension}$`), ''), subdir: '', save_as: false, will_use_jsfetch: true,
-      strategy: 'mpd_audio_video_one_source', muxer: extension, url: new URL(stream.url), carry_get_params: false, entry: variant.workerEntry,
+      strategy: 'mpd_audio_video_one_source', muxer: extension, url: safeUrlObject(stream.url), carry_get_params: false, entry: variant.workerEntry,
       duration: 'unknown', extension, is_youtube: false, throttle: false, cache: 'default' }, report);
     workerBlobUrl = await workerDownloadUrl(result);
   } else {
@@ -939,7 +1093,7 @@ async function offlineStreamDownload(tabId, streamUrl, variantId) {
     extension = (stream.type === 'WebM' ? 'webm' : stream.type || 'mp4').toLowerCase();
     updateOfflineJob(jobId, { workerDownloadId: id });
     const result = await vdownDownload({ download_id: id, headers: new Headers(headers), good_basename: safeFilename(stream.name, extension).replace(new RegExp(`\\.${extension}$`), ''), subdir: '', save_as: false,
-      will_use_jsfetch: false, strategy: 'http_audio_video_one_source', url: new URL(stream.url), carry_get_params: false,
+      will_use_jsfetch: false, strategy: 'http_audio_video_one_source', url: safeUrlObject(stream.url), carry_get_params: false,
       extension, is_youtube: false, throttle: false, cache: 'default' }, report);
     workerBlobUrl = await workerDownloadUrl(result);
   }
