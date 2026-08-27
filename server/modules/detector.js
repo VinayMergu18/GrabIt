@@ -688,9 +688,107 @@ async function probeYouTubeSingle(url, type) {
  *   The caller (routes/probe.js) starts the worker pool after this returns.
  *   Workers probe individual videos concurrently and broadcast
  *   `playlist_progress` WS events as they complete.
- */
+//  */
+// async function probeYouTubePlaylist(url, type = 'playlist') {
+//   const FN     = 'probeYouTubePlaylist';
+//   const listId = listIdFromUrl(url);
+
+//   // Block known problematic URLs early to avoid wasting resources
+//   const BLOCKED_URL_PATTERNS = [
+//     /^https?:\/\/127\.0\.0\.1:/,
+//     /^https?:\/\/localhost:/,
+//     /^https?:\/\/\[::1\]/
+//   ];
+
+//   for (const pattern of BLOCKED_URL_PATTERNS) {
+//     if (pattern.test(url)) {
+//       log.warn(FN, 'Blocking known problematic URL', { url });
+//       return {
+//         platform: 'youtube',
+//         contentType: type,
+//         playlistId: null,
+//         title: 'Blocked URL',
+//         uploader: null,
+//         thumbnail: null,
+//         itemCount: 0,
+//         totalCount: 0,
+//         duration: 0,
+//         videoTotals: {},
+//         audioTotals: {},
+//         entries: [],
+//         enriching: false,
+//         actions: [],
+//         stage: 2
+//       };
+//     }
+//   }
+
+//   log.info(FN, 'Starting playlist probe', { url, type, listId });
+
+//   if (listId) {
+//     const cached = playlistCache.get(listId);
+//     if (cached) { log.ok(FN, 'Cache hit', { listId, itemCount: cached.itemCount }); return cached; }
+//   }
+
+//   const args = [
+//     '--dump-json', '--flat-playlist',
+//     '--quiet', '--no-warnings',
+//     ...getCookiesArgs('yt-dlp'),
+//     url
+//   ];
+
+//   let stdout, stderr;
+//   try {
+//     ({ stdout, stderr } = await runYtDlpProbe(FN, args, { timeout: 60000, maxBuffer: 200 * 1024 * 1024 }));
+//   } catch (e) {
+//     if (e.stdout?.trim()) { stdout = e.stdout; log.warn(FN, 'Using salvaged stdout after error'); }
+//     else { log.error(FN, 'Playlist probe failed', e); throw new Error(extractProcError(e, 'Playlist probe failed')); }
+//   }
+
+//   const UNAVAIL = new Set(['unavailable', 'needs_auth', 'subscriber_only', 'premium_only']);
+//   const allParsed = (stdout || '').trim().split('\n').filter(Boolean)
+//     .map(l => { try { return JSON.parse(l); } catch { return null; } })
+//     .filter(Boolean);
+
+//   const container = allParsed.find(e => e._type === 'playlist');
+//   const entries   = allParsed.filter(e => {
+//     if (!e.id || e._type === 'playlist') return false;
+//     if (UNAVAIL.has(e.availability)) return false;
+//     if (/^\[(Deleted|Private) video\]$/.test(e.title || '')) return false;
+//     return true;
+//   });
+
+//   const knownDuration = entries.reduce((s, e) => s + (e.duration || 0), 0);
+
+//   const result = {
+//     platform:     'youtube',
+//     contentType:  type,
+//     playlistId:   listId || container?.id,
+//     title:        container?.title || entries[0]?.playlist_title || 'Playlist',
+//     uploader:     container?.uploader || container?.channel || entries[0]?.uploader,
+//     thumbnail:    container?.thumbnails?.[0]?.url || entries[0]?.thumbnail,
+//     itemCount:    entries.length,
+//     totalCount:   allParsed.filter(e => e._type !== 'playlist').length,
+//     duration:     knownDuration,
+//     // Per-tier sizes start null; playlist-worker fills them via WS
+//     videoTotals:  Object.fromEntries([144,240,360,480,720,1080,1440,2160].map(h => [h, null])),
+//     audioTotals:  Object.fromEntries(['mp3','m4a','aac','opus','flac','wav','ogg'].map(f => [f, null])),
+//     entries,      // raw flat entries — passed to playlist-worker
+//     enriching:    entries.length > 0,
+//     actions:      getYouTubeActions(type),
+//     stage:        2
+//   };
+
+//   if (listId) playlistCache.set(listId, result);
+//   return result;
+// }
+
+
+
 async function probeYouTubePlaylist(url, type = 'playlist') {
-  const FN     = 'probeYouTubePlaylist';
+
+  const FN = 'probeYouTubePlaylist';
+
   const listId = listIdFromUrl(url);
 
   // Block known problematic URLs early to avoid wasting resources
@@ -703,6 +801,7 @@ async function probeYouTubePlaylist(url, type = 'playlist') {
   for (const pattern of BLOCKED_URL_PATTERNS) {
     if (pattern.test(url)) {
       log.warn(FN, 'Blocking known problematic URL', { url });
+
       return {
         platform: 'youtube',
         contentType: type,
@@ -713,8 +812,19 @@ async function probeYouTubePlaylist(url, type = 'playlist') {
         itemCount: 0,
         totalCount: 0,
         duration: 0,
+
         videoTotals: {},
+        videoSubTotals: {},
         audioTotals: {},
+
+        subtitleInfo: {
+          hasSubtitles: false,
+          languages: [],
+          subOverheadBytes: 0
+        },
+
+        subtitleLangs: [],
+
         entries: [],
         enriching: false,
         actions: [],
@@ -727,59 +837,168 @@ async function probeYouTubePlaylist(url, type = 'playlist') {
 
   if (listId) {
     const cached = playlistCache.get(listId);
-    if (cached) { log.ok(FN, 'Cache hit', { listId, itemCount: cached.itemCount }); return cached; }
+
+    if (cached) {
+      log.ok(FN, 'Cache hit', {
+        listId,
+        itemCount: cached.itemCount
+      });
+
+      return cached;
+    }
   }
 
   const args = [
-    '--dump-json', '--flat-playlist',
-    '--quiet', '--no-warnings',
+    '--dump-json',
+    '--flat-playlist',
+    '--quiet',
+    '--no-warnings',
     ...getCookiesArgs('yt-dlp'),
     url
   ];
 
   let stdout, stderr;
+
   try {
-    ({ stdout, stderr } = await runYtDlpProbe(FN, args, { timeout: 60000, maxBuffer: 200 * 1024 * 1024 }));
+    ({ stdout, stderr } = await runYtDlpProbe(
+      FN,
+      args,
+      {
+        timeout: 60000,
+        maxBuffer: 200 * 1024 * 1024
+      }
+    ));
   } catch (e) {
-    if (e.stdout?.trim()) { stdout = e.stdout; log.warn(FN, 'Using salvaged stdout after error'); }
-    else { log.error(FN, 'Playlist probe failed', e); throw new Error(extractProcError(e, 'Playlist probe failed')); }
+    if (e.stdout?.trim()) {
+      stdout = e.stdout;
+      log.warn(FN, 'Using salvaged stdout after error');
+    } else {
+      log.error(FN, 'Playlist probe failed', e);
+      throw new Error(extractProcError(e, 'Playlist probe failed'));
+    }
   }
 
-  const UNAVAIL = new Set(['unavailable', 'needs_auth', 'subscriber_only', 'premium_only']);
-  const allParsed = (stdout || '').trim().split('\n').filter(Boolean)
-    .map(l => { try { return JSON.parse(l); } catch { return null; } })
+  const UNAVAIL = new Set([
+    'unavailable',
+    'needs_auth',
+    'subscriber_only',
+    'premium_only'
+  ]);
+
+  const allParsed = (stdout || '')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map(l => {
+      try {
+        return JSON.parse(l);
+      } catch {
+        return null;
+      }
+    })
     .filter(Boolean);
 
   const container = allParsed.find(e => e._type === 'playlist');
-  const entries   = allParsed.filter(e => {
+
+  const entries = allParsed.filter(e => {
     if (!e.id || e._type === 'playlist') return false;
     if (UNAVAIL.has(e.availability)) return false;
-    if (/^\[(Deleted|Private) video\]$/.test(e.title || '')) return false;
+
+    if (/^\[(Deleted|Private) video\]$/.test(e.title || '')) {
+      return false;
+    }
+
     return true;
   });
 
-  const knownDuration = entries.reduce((s, e) => s + (e.duration || 0), 0);
+  const knownDuration = entries.reduce(
+    (s, e) => s + (e.duration || 0),
+    0
+  );
 
-  const result = {
-    platform:     'youtube',
-    contentType:  type,
-    playlistId:   listId || container?.id,
-    title:        container?.title || entries[0]?.playlist_title || 'Playlist',
-    uploader:     container?.uploader || container?.channel || entries[0]?.uploader,
-    thumbnail:    container?.thumbnails?.[0]?.url || entries[0]?.thumbnail,
-    itemCount:    entries.length,
-    totalCount:   allParsed.filter(e => e._type !== 'playlist').length,
-    duration:     knownDuration,
-    // Per-tier sizes start null; playlist-worker fills them via WS
-    videoTotals:  Object.fromEntries([144,240,360,480,720,1080,1440,2160].map(h => [h, null])),
-    audioTotals:  Object.fromEntries(['mp3','m4a','aac','opus','flac','wav','ogg'].map(f => [f, null])),
-    entries,      // raw flat entries — passed to playlist-worker
-    enriching:    entries.length > 0,
-    actions:      getYouTubeActions(type),
-    stage:        2
+  /*
+   * IMPORTANT:
+   *
+   * --flat-playlist does NOT give us complete subtitle metadata.
+   *
+   * Therefore subtitleInfo here starts empty.
+   * playlist-worker.js must enrich individual entries and aggregate:
+   *   - manual subtitles
+   *   - automatic captions
+   *
+   * into this structure.
+   */
+
+  const subtitleInfo = {
+    hasSubtitles: false,
+    languages: [],
+    subOverheadBytes: 0
   };
 
-  if (listId) playlistCache.set(listId, result);
+  const result = {
+    platform: 'youtube',
+    contentType: type,
+
+    playlistId: listId || container?.id,
+
+    title:
+      container?.title ||
+      entries[0]?.playlist_title ||
+      'Playlist',
+
+    uploader:
+      container?.uploader ||
+      container?.channel ||
+      entries[0]?.uploader,
+
+    thumbnail:
+      container?.thumbnails?.[0]?.url ||
+      entries[0]?.thumbnail,
+
+    itemCount: entries.length,
+
+    totalCount:
+      allParsed.filter(e => e._type !== 'playlist').length,
+
+    duration: knownDuration,
+
+    // Normal video totals
+    videoTotals: Object.fromEntries(
+      [144, 240, 360, 480, 720, 1080, 1440, 2160]
+        .map(h => [h, null])
+    ),
+
+    // Separate totals for video + subtitles
+    videoSubTotals: Object.fromEntries(
+      [144, 240, 360, 480, 720, 1080, 1440, 2160]
+        .map(h => [h, null])
+    ),
+
+    audioTotals: Object.fromEntries(
+      ['mp3', 'm4a', 'aac', 'opus', 'flac', 'wav', 'ogg']
+        .map(f => [f, null])
+    ),
+
+    // Playlist subtitle information.
+    // playlist-worker.js should replace/merge this during enrichment.
+    subtitleInfo,
+
+    // Convenience list for popup compatibility.
+    subtitleLangs: [],
+
+    entries,
+
+    enriching: entries.length > 0,
+
+    actions: getYouTubeActions(type),
+
+    stage: 2
+  };
+
+  if (listId) {
+    playlistCache.set(listId, result);
+  }
+
   return result;
 }
 

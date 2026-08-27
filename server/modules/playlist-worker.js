@@ -62,11 +62,15 @@ function startPlaylistEnrichment(playlistId, tabId, entries, cookieFile) {
   const total        = entries.length;
   const probeCount   = probeEntries.length;
 
-  // Accumulator: sizes keyed by tier height, then by audio format
-  const videoTotals = Object.fromEntries(TIER_HEIGHTS.map(h => [h, 0]));
-  const subtitleTotals = Object.fromEntries(TIER_HEIGHTS.map(h => [h, 0])); // subtitle overhead per tier
-  const audioTotals = Object.fromEntries(AUDIO_FMTS.map(f => [f, 0]));
-  const totalDuration = { value: 0 };
+// Accumulators
+const videoTotals = Object.fromEntries(TIER_HEIGHTS.map(h => [h, 0]));
+const subtitleTotals = Object.fromEntries(TIER_HEIGHTS.map(h => [h, 0]));
+const audioTotals = Object.fromEntries(AUDIO_FMTS.map(f => [f, 0]));
+const totalDuration = { value: 0 };
+
+// Aggregated subtitle languages across the playlist.
+// Map keeps one entry per language and lets manual subtitles win over auto.
+const subtitleLanguages = new Map();
 
 // console.log('entries:', entries);
 // console.log('Array?', Array.isArray(entries));
@@ -76,8 +80,21 @@ function startPlaylistEnrichment(playlistId, tabId, entries, cookieFile) {
   let skipped   = 0;
 
   // Broadcast initial state immediately
-  _broadcast(playlistId, tabId, { completed, total: probeCount, skipped, videoTotals: { ...videoTotals }, audioTotals: { ...audioTotals }, totalDuration: 0, done: false });
-
+  _broadcast(playlistId, tabId, {
+    completed,
+    total: probeCount,
+    skipped,
+    videoTotals: { ...videoTotals },
+    subtitleTotals: { ...subtitleTotals },
+    audioTotals: { ...audioTotals },
+    subtitleInfo: {
+      hasSubtitles: false,
+      languages: [],
+      subOverheadBytes: 0
+    },
+    totalDuration: 0,
+    done: false
+  });
   // Run the worker pool
   _runPool(probeEntries, MAX_WORKERS, async (entry) => {
     if (cancelled) return;
@@ -95,28 +112,56 @@ function startPlaylistEnrichment(playlistId, tabId, entries, cookieFile) {
 
         videoCache.set(videoId, meta);
         formats = buildFullFormatsFromMeta(meta);
-
-formats = buildFullFormatsFromMeta(meta);
-
-formatCache.set(videoId, formats);
-
-totalDuration.value += meta.duration || 0;
-
-
         formatCache.set(videoId, formats);
-
         totalDuration.value += meta.duration || 0;
       }
 
-      // Accumulate video + subtitle sizes per tier
-      const subtitleOffset = formats.subtitleInfo.subOverheadBytes || 0; 
+      // Accumulate subtitle languages across all videos.
+      // If the same language exists as both manual and automatic,
+      // keep the manual version.
+      const subInfo = formats.subtitleInfo;
+
+      if (subInfo?.languages?.length) {
+        for (const lang of subInfo.languages) {
+          const existing = subtitleLanguages.get(lang.code);
+
+          if (!existing || (lang.isManual && !existing.isManual)) {
+            subtitleLanguages.set(lang.code, { ...lang });
+          }
+        }
+      }
+
+      // Accumulate subtitle overhead per quality tier.
+      // buildFullFormatsFromMeta() already adds subtitle overhead to
+      // videoSubFormats, so use the difference between the two ladders.
+      const videoFormats = formats.videoFormats || [];
+      const videoSubFormats = formats.videoSubFormats || [];
+
       for (const tier of TIER_HEIGHTS) {
-        const videoFormats = formats.videoFormats;
-        const best = videoFormats
+        const videoBest = videoFormats
           .filter(f => f.available && f.size && f.height <= tier)
           .sort((a, b) => b.height - a.height)[0];
-        const size = best ? best.size : 0;
-        videoTotals[tier] += size + subtitleOffset;
+
+        const subBest = videoSubFormats
+          .filter(f => f.available && f.size && f.height <= tier)
+          .sort((a, b) => b.height - a.height)[0];
+
+        if (videoBest && subBest) {
+          const overhead = Math.max(0, subBest.size - videoBest.size);
+          subtitleTotals[tier] += overhead;
+        }
+      }
+
+      // Accumulate video sizes per quality tier.
+      // Subtitle overhead is kept separate from videoTotals.
+          for (const tier of TIER_HEIGHTS) {
+          const best = videoFormats
+          .filter(f => f.available && f.size && f.height <= tier)
+          .sort((a, b) => b.height - a.height)[0];
+
+if (best) {
+  videoTotals[tier] += best.size;
+}
       }
       // Accumulate audio format sizes
       for (const fmt of AUDIO_FMTS) {
@@ -131,19 +176,81 @@ totalDuration.value += meta.duration || 0;
     if (cancelled) return;
 
     // Broadcast progress after every completed video
+    const videoTotalsExtrap = _extrapolate(
+      videoTotals,
+      completed,
+      probeCount,
+      total
+    );
+    const subtitleTotalsExtrap = _extrapolate(
+      subtitleTotals,
+      completed,
+      probeCount,
+      total
+    );
+    const audioTotalsExtrap = _extrapolate(
+      audioTotals,
+      completed,
+      probeCount,
+      total
+    );
+    const totalSubtitleOverheadEst = (subtitleTotalsExtrap && subtitleTotalsExtrap[144]) || 0;
+
     _broadcast(playlistId, tabId, {
-      completed, total: probeCount, skipped,
-      videoTotals: _extrapolate(videoTotals, completed, probeCount, total),
-      audioTotals: _extrapolate(audioTotals, completed, probeCount, total),
+      completed,
+      total: probeCount,
+      skipped,
+
+      videoTotals: videoTotalsExtrap,
+      subtitleTotals: subtitleTotalsExtrap,
+      audioTotals: audioTotalsExtrap,
+
+      subtitleInfo: {
+        hasSubtitles: subtitleLanguages.size > 0,
+        languages: Array.from(subtitleLanguages.values()),
+        subOverheadBytes: totalSubtitleOverheadEst
+      },
+
       totalDuration: totalDuration.value,
       done: false
     });
   }).then(() => {
     if (cancelled) return;
+    const videoTotalsExtrap = _extrapolate(
+      videoTotals,
+      completed,
+      probeCount,
+      total
+    );
+    const subtitleTotalsExtrap = _extrapolate(
+      subtitleTotals,
+      completed,
+      probeCount,
+      total
+    );
+    const audioTotalsExtrap = _extrapolate(
+      audioTotals,
+      completed,
+      probeCount,
+      total
+    );
+    const totalSubtitleOverheadEst = (subtitleTotalsExtrap && subtitleTotalsExtrap[144]) || 0;
+
     _broadcast(playlistId, tabId, {
-      completed, total: probeCount, skipped,
-      videoTotals: _extrapolate(videoTotals, completed, probeCount, total),
-      audioTotals: _extrapolate(audioTotals, completed, probeCount, total),
+      completed,
+      total: probeCount,
+      skipped,
+
+      videoTotals: videoTotalsExtrap,
+      subtitleTotals: subtitleTotalsExtrap,
+      audioTotals: audioTotalsExtrap,
+
+      subtitleInfo: {
+        hasSubtitles: subtitleLanguages.size > 0,
+        languages: Array.from(subtitleLanguages.values()),
+        subOverheadBytes: totalSubtitleOverheadEst
+      },
+
       totalDuration: totalDuration.value,
       done: true
     });

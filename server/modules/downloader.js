@@ -121,14 +121,14 @@ async function convertWebpToJpg(filePath, item, downloadId) {
     await spawnProcess(ffmpegBin, args, downloadId, item, () => null);
 
     // Verify the conversion worked
-if (fs.existsSync(jpgPath)) {
-  // Remove the original WebP file
-  fs.unlinkSync(filePath);
+  if (fs.existsSync(jpgPath)) {
+    // Remove the original WebP file
+    fs.unlinkSync(filePath);
 
-  log.ok(
-    'convertWebpToJpg',
-    `Converted ${path.basename(filePath)}`
-  );
+    log.ok(
+      'convertWebpToJpg',
+      `Converted ${path.basename(filePath)}`
+    );
 
       // Update tempFiles tracking if we're tracking this item
       if (item && item.tempFiles) {
@@ -169,12 +169,219 @@ function parseYtDlpLine(line) {
 
 // ── Core process runner ───────────────────────────────────────────────────────
 
+// function spawnProcess(bin, args, downloadId, item, parseLine) {
+//   const FN = `spawnProcess[${path.basename(bin)}]`;
+//   const isFFmpeg = path.basename(bin).toLowerCase().startsWith('ffmpeg');
+
+//   if (!isFFmpeg) {
+//     log.cmd(FN, bin, args);
+//     log.download(FN, 'started', {
+//       downloadId,
+//       bin: path.basename(bin),
+//       title: item?.title?.slice(0, 80)
+//     });
+//   }
+
+//   return new Promise((resolve, reject) => {
+//     const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+//     if (item) {
+//       item.proc      = proc;
+//       item.tempFiles = item.tempFiles || [];
+//     }
+
+//     let stdout = '', stderr = '', lastPct = -1;
+//     const files = [];
+
+//   const onLine = (line) => {
+//     if (line.trim() && !isFFmpeg) {
+//       log.debug(FN, 'stdout', {
+//         downloadId,
+//         line: line.trim().slice(0, 300)
+//       });
+//     }
+//         if (item?.cancelled) { try { proc.kill('SIGTERM'); } catch {} return; }
+
+//         // Capture output filenames
+//         const destMatch = line.match(/\[download\] Destination:\s*(.+)$/);
+//         if (destMatch) {
+//           const f = destMatch[1].trim();
+//           files.push(f);
+//           if (item && !item.tempFiles.includes(f)) item.tempFiles.push(f);
+
+//           // If this queue item represents a playlist download (server-side options set by probe/popup),
+//           // increment the per-playlist downloaded counter and reset per-file progress so the UI
+//           // shows a fresh progress bar for the next file.
+//           try {
+//             if (item && item.options && typeof item.options.playlistTotal === 'number') {
+//               item.options.playlistDownloaded = (item.options.playlistDownloaded || 0) + 1;
+//               // Reset file-level progress so bar goes back to 0 for the new file
+//               item.progress = { percent: 0, speed: null, eta: null, totalSize: null };
+
+//               // Broadcast immediate progress update including playlist counts so the popup can update
+//               // the per-item playlist badge without waiting for a full queue refresh.
+//               // Immediately notify clients that a new file has been detected and playlist counters changed.
+//               // Use websocket.broadcastProgress with immediate=true so the UI can reset per-file bars and update counters.
+//               try {
+//                 const meta = {
+//                   playlistDownloaded: item.options.playlistDownloaded,
+//                   playlistTotal: item.options.playlistTotal,
+//                   playlistName: item.options.playlistName || item.title
+//                 };
+//                 // When a new Destination line is seen, reset progress.percent to 0 in-memory and broadcast immediately.
+//                 if (!item.progress) item.progress = { percent: 0 };
+//                 else item.progress.percent = 0;
+//                 broadcastProgress(downloadId, item.progress, meta, true);
+//               } catch (e) {
+//                 log.warn('spawnProcess', 'Failed to update playlist counters', { error: e.message });
+//               }
+//             }
+//           } catch (e) {
+//             log.warn('spawnProcess', 'Failed to update playlist counters', { error: e.message });
+//           }
+//         }
+
+//         const alreadyMatch = line.match(/\[download\]\s+(.+?)\s+has already been downloaded/i);
+
+//         if (alreadyMatch) {
+//             let f = alreadyMatch[1].trim();
+
+//             // If the reported file doesn't exist, try finding the real file
+//             if (!fs.existsSync(f)) {
+//                 const dir = path.dirname(f);
+//                 const ext = path.extname(f);
+//                 const id = path.basename(f, ext).split('_').pop();
+
+//                 try {
+//                     const match = fs.readdirSync(dir).find(name =>
+//                         name.endsWith(`_${id}${ext}`)
+//                     );
+
+//                     if (match) {
+//                         f = path.join(dir, match);
+//                     }
+//                 } catch {}
+//             }
+
+//             if (!files.includes(f)) {
+//                 files.push(f);
+//             }
+
+//             if (item && !item.tempFiles.includes(f)) {
+//                 item.tempFiles.push(f);
+//             }
+//         }
+//         const mergeMatch = line.match(/Merging formats into "(.+)"/);
+//         if (mergeMatch) files.push(mergeMatch[1].trim());
+//         const audioMatch = line.match(/\[ExtractAudio\].*Destination:\s*(.+)$/);
+//         if (audioMatch) files.push(audioMatch[1].trim());
+
+//         const prog = parseLine(line);
+//         if (prog && downloadId) {
+//           // Monotonic: never go backward
+//           if (prog.percent > lastPct) {
+//             lastPct = prog.percent;
+//             broadcastProgress(downloadId, prog);
+//             if (item) item.progress = prog;
+//           }
+//         }
+//       };
+
+//     let outBuf = '', errBuf = '';
+//     proc.stdout.setEncoding('utf8');
+//     proc.stderr.setEncoding('utf8');
+
+//     proc.stdout.on('data', chunk => {
+//       stdout += chunk; outBuf += chunk;
+//       const lines = outBuf.split('\n'); outBuf = lines.pop();
+//       lines.forEach(onLine);
+//     });
+//   proc.stderr.on('data', chunk => {
+//   stderr += chunk;
+//   errBuf += chunk;
+//   const lines = errBuf.split('\n');
+//   errBuf = lines.pop();
+
+//   lines.forEach(line => {
+//     if (line.trim() && !isFFmpeg) {
+//       log.warn(FN, 'stderr', {
+//         downloadId,
+//         line: line.trim().slice(0, 300)
+//       });
+//     }
+
+//     onLine(line);
+//   });
+// });
+
+//     proc.on('close', code => {
+//       if (item) item.proc = null;
+//       if (item?.cancelled) {
+//         log.warn(FN, 'Download cancelled by user', { downloadId });
+//         return reject(new Error('Cancelled'));
+//       }
+//       if (code !== 0 && code !== null) {
+//         const errTail = (stderr || stdout).trim().split('\n').slice(-8).join('\n');
+//         log.error(FN, `Process exited ${code}`, {
+//           downloadId,
+//           exitCode: code,
+//           stderr: stderr.trim().slice(0, 2000) || '(empty)',
+//           stdout: stdout.trim().slice(0, 500) || '(empty)',
+//           files
+//         });
+//         return reject(new Error(`${path.basename(bin)} exited ${code}: ${errTail}`));
+//       }
+//       // log.download(FN, 'complete', { downloadId, exitCode: code, files, stdoutBytes: stdout.length, stderrBytes: stderr.length });
+//         if (!isFFmpeg) {
+//       log.download(FN, 'complete', {
+//         downloadId,
+//         exitCode: code,
+//         files,
+//         stdoutBytes: stdout.length,
+//         stderrBytes: stderr.length
+//       });
+
+//       // Clean up subtitle sidecar files for YouTube downloads that embed subtitles
+//       const isYtDlp = path.basename(bin).toLowerCase().startsWith('yt-dlp');
+//       const hasEmbedSubs = args.some(arg => arg === '--embed-subs');
+//       if (isYtDlp && hasEmbedSubs) {
+//         const subtitleExtensions = ['.srt', '.vtt', '.ass', '.ssa'];
+//         for (const file of files) {
+//           if (file && typeof file === 'string') {
+//             const basePath = file.substring(0, file.lastIndexOf('.'));
+//             for (const ext of subtitleExtensions) {
+//               const subtitleFile = basePath + ext;
+//               try {
+//                 if (fs.existsSync(subtitleFile)) {
+//                   fs.unlinkSync(subtitleFile);
+//                   log.debug(FN, `Deleted subtitle sidecar: ${path.basename(subtitleFile)}`);
+//                 }
+//               } catch (unlinkErr) {
+//                 log.warn(FN, `Failed to delete subtitle sidecar ${subtitleFile}: ${unlinkErr.message}`);
+//               }
+//             }
+//           }
+//         }
+//       }
+//   }
+//       resolve({ success: true, file: files[files.length - 1] || null, files, stdout, stderr });
+//     });
+
+//     proc.on('error', err => {
+//       if (item) item.proc = null;
+//       log.error(FN, `Cannot start process: ${err.message}`, { downloadId, bin, errorCode: err.code });
+//       reject(new Error(`Cannot start ${path.basename(bin)}: ${err.message}`));
+//     });
+//   });
+// }
+
 function spawnProcess(bin, args, downloadId, item, parseLine) {
   const FN = `spawnProcess[${path.basename(bin)}]`;
   const isFFmpeg = path.basename(bin).toLowerCase().startsWith('ffmpeg');
+  const isYtDlp = path.basename(bin).toLowerCase().startsWith('yt-dlp');
 
   if (!isFFmpeg) {
     log.cmd(FN, bin, args);
+
     log.download(FN, 'started', {
       downloadId,
       bin: path.basename(bin),
@@ -183,171 +390,454 @@ function spawnProcess(bin, args, downloadId, item, parseLine) {
   }
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(bin, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true
+    });
+
     if (item) {
-      item.proc      = proc;
+      item.proc = proc;
       item.tempFiles = item.tempFiles || [];
     }
 
-    let stdout = '', stderr = '', lastPct = -1;
+    let stdout = '';
+    let stderr = '';
+    let lastPct = -1;
+
     const files = [];
 
-const onLine = (line) => {
-  if (line.trim() && !isFFmpeg) {
-    log.debug(FN, 'stdout', {
-      downloadId,
-      line: line.trim().slice(0, 300)
-    });
-  }
-      if (item?.cancelled) { try { proc.kill('SIGTERM'); } catch {} return; }
+    const addFile = (file) => {
+      if (!file || typeof file !== 'string') return;
 
-      // Capture output filenames
-      const destMatch = line.match(/\[download\] Destination:\s*(.+)$/);
+      const f = file.trim();
+      if (!f) return;
+
+      if (!files.includes(f)) {
+        files.push(f);
+      }
+
+      if (item && !item.tempFiles.includes(f)) {
+        item.tempFiles.push(f);
+      }
+    };
+
+    const onLine = (line) => {
+      const trimmed = line.trim();
+
+      if (!trimmed) return;
+
+      if (!isFFmpeg) {
+        log.debug(FN, 'stdout', {
+          downloadId,
+          line: trimmed.slice(0, 300)
+        });
+      }
+
+      if (item?.cancelled) {
+        try {
+          proc.kill('SIGTERM');
+        } catch {}
+        return;
+      }
+
+      // ─────────────────────────────────────────────
+      // Capture download destination
+      // ─────────────────────────────────────────────
+      const destMatch = trimmed.match(
+        /^\[download\]\s+Destination:\s*(.+)$/
+      );
+
       if (destMatch) {
         const f = destMatch[1].trim();
-        files.push(f);
-        if (item && !item.tempFiles.includes(f)) item.tempFiles.push(f);
 
-        // If this queue item represents a playlist download (server-side options set by probe/popup),
-        // increment the per-playlist downloaded counter and reset per-file progress so the UI
-        // shows a fresh progress bar for the next file.
-        try {
-          if (item && item.options && typeof item.options.playlistTotal === 'number') {
-            item.options.playlistDownloaded = (item.options.playlistDownloaded || 0) + 1;
-            // Reset file-level progress so bar goes back to 0 for the new file
-            item.progress = { percent: 0, speed: null, eta: null, totalSize: null };
+        addFile(f);
 
-            // Broadcast immediate progress update including playlist counts so the popup can update
-            // the per-item playlist badge without waiting for a full queue refresh.
-            const ws = require('./websocket');
-            // Immediately notify clients that a new file has been detected and playlist counters changed.
-            // Use websocket.broadcastProgress with immediate=true so the UI can reset per-file bars and update counters.
-            try {
-              const meta = {
-                playlistDownloaded: item.options.playlistDownloaded,
-                playlistTotal: item.options.playlistTotal,
-                playlistName: item.options.playlistName || item.title
-              };
-              // When a new Destination line is seen, reset progress.percent to 0 in-memory and broadcast immediately.
-              if (!item.progress) item.progress = { percent: 0 };
-              else item.progress.percent = 0;
-              broadcastProgress(downloadId, item.progress, meta, true);
-            } catch (e) {
-              log.warn('spawnProcess', 'Failed to update playlist counters', { error: e.message });
-            }
+        /*
+         * A new destination means a new playlist file.
+         * Reset progress tracking so the next file can start
+         * from 0% instead of being blocked by the previous 100%.
+         */
+        if (
+          item &&
+          item.options &&
+          typeof item.options.playlistTotal === 'number'
+        ) {
+          item.options.playlistDownloaded =
+            item.options.playlistDownloaded || 0;
+
+          lastPct = -1;
+
+          item.progress = {
+            percent: 0,
+            speed: null,
+            eta: null,
+            totalSize: null
+          };
+
+          try {
+            const meta = {
+              playlistDownloaded: item.options.playlistDownloaded,
+              playlistTotal: item.options.playlistTotal,
+              playlistName:
+                item.options.playlistName || item.title
+            };
+
+            broadcastProgress(
+              downloadId,
+              item.progress,
+              meta,
+              true
+            );
+          } catch (e) {
+            log.warn(
+              FN,
+              'Failed to broadcast playlist file start',
+              {
+                error: e.message
+              }
+            );
           }
-        } catch (e) {
-          log.warn('spawnProcess', 'Failed to update playlist counters', { error: e.message });
         }
       }
-      
-      const alreadyMatch = line.match(/\[download\]\s+(.+?)\s+has already been downloaded/i);
+
+      // ─────────────────────────────────────────────
+      // Already downloaded
+      // ─────────────────────────────────────────────
+      const alreadyMatch = trimmed.match(
+        /^\[download\]\s+(.+?)\s+has already been downloaded/i
+      );
 
       if (alreadyMatch) {
-          let f = alreadyMatch[1].trim();
+        let f = alreadyMatch[1].trim();
 
-          // If the reported file doesn't exist, try finding the real file
-          if (!fs.existsSync(f)) {
-              const dir = path.dirname(f);
-              const ext = path.extname(f);
-              const id = path.basename(f, ext).split('_').pop();
+        if (!fs.existsSync(f)) {
+          const dir = path.dirname(f);
+          const ext = path.extname(f);
 
-              try {
-                  const match = fs.readdirSync(dir).find(name =>
-                      name.endsWith(`_${id}${ext}`)
-                  );
+          const id = path
+            .basename(f, ext)
+            .split('_')
+            .pop();
 
-                  if (match) {
-                      f = path.join(dir, match);
-                  }
-              } catch {}
+          try {
+            if (fs.existsSync(dir)) {
+              const match = fs.readdirSync(dir).find(name =>
+                name.endsWith(`_${id}${ext}`)
+              );
+
+              if (match) {
+                f = path.join(dir, match);
+              }
+            }
+          } catch (err) {
+            log.warn(
+              FN,
+              'Failed to verify already-downloaded file',
+              {
+                error: err.message,
+                path: f
+              }
+            );
           }
+        }
 
-          if (!files.includes(f)) {
-              files.push(f);
-          }
-
-          if (item && !item.tempFiles.includes(f)) {
-              item.tempFiles.push(f);
-          }
+        addFile(f);
       }
-      const mergeMatch = line.match(/Merging formats into "(.+)"/);
-      if (mergeMatch) files.push(mergeMatch[1].trim());
-      const audioMatch = line.match(/\[ExtractAudio\].*Destination:\s*(.+)$/);
-      if (audioMatch) files.push(audioMatch[1].trim());
 
-      const prog = parseLine(line);
-      if (prog && downloadId) {
-        // Monotonic: never go backward
-        if (prog.percent > lastPct) {
-          lastPct = prog.percent;
-          broadcastProgress(downloadId, prog);
-          if (item) item.progress = prog;
+      // ─────────────────────────────────────────────
+      // Merging formats
+      // ─────────────────────────────────────────────
+      const mergeMatch = trimmed.match(
+        /Merging formats into "(.+)"/
+      );
+
+      if (mergeMatch) {
+        addFile(mergeMatch[1]);
+      }
+
+      // ─────────────────────────────────────────────
+      // ExtractAudio destination
+      // ─────────────────────────────────────────────
+      const audioMatch = trimmed.match(
+        /^\[ExtractAudio\].*Destination:\s*(.+)$/
+      );
+
+      if (audioMatch) {
+        addFile(audioMatch[1]);
+      }
+
+      // ─────────────────────────────────────────────
+      // Progress
+      // ─────────────────────────────────────────────
+      if (typeof parseLine === 'function') {
+        const prog = parseLine(trimmed);
+
+        if (prog && downloadId) {
+          if (prog.percent > lastPct) {
+            lastPct = prog.percent;
+
+            broadcastProgress(downloadId, prog);
+
+            if (item) {
+              item.progress = prog;
+            }
+          }
         }
       }
     };
 
-    let outBuf = '', errBuf = '';
+    let outBuf = '';
+    let errBuf = '';
+
     proc.stdout.setEncoding('utf8');
     proc.stderr.setEncoding('utf8');
 
+    // ─────────────────────────────────────────────
+    // STDOUT
+    // ─────────────────────────────────────────────
     proc.stdout.on('data', chunk => {
-      stdout += chunk; outBuf += chunk;
-      const lines = outBuf.split('\n'); outBuf = lines.pop();
+      stdout += chunk;
+      outBuf += chunk;
+
+      const lines = outBuf.split('\n');
+      outBuf = lines.pop() || '';
+
       lines.forEach(onLine);
     });
-  proc.stderr.on('data', chunk => {
-  stderr += chunk;
-  errBuf += chunk;
-  const lines = errBuf.split('\n');
-  errBuf = lines.pop();
 
-  lines.forEach(line => {
-    if (line.trim() && !isFFmpeg) {
-      log.warn(FN, 'stderr', {
-        downloadId,
-        line: line.trim().slice(0, 300)
+    // ─────────────────────────────────────────────
+    // STDERR
+    // IMPORTANT:
+    // Do NOT pass stderr into onLine().
+    // yt-dlp warnings/errors are not download progress.
+    // ─────────────────────────────────────────────
+    proc.stderr.on('data', chunk => {
+      stderr += chunk;
+      errBuf += chunk;
+
+      const lines = errBuf.split('\n');
+      errBuf = lines.pop() || '';
+
+      lines.forEach(line => {
+        const trimmed = line.trim();
+
+        if (!trimmed || isFFmpeg) return;
+
+        const isError = /error|failed|unable|forbidden|403/i.test(
+          trimmed
+        );
+
+        if (isError) {
+          log.error(FN, 'stderr', {
+            downloadId,
+            line: trimmed.slice(0, 500)
+          });
+        } else {
+          log.warn(FN, 'stderr', {
+            downloadId,
+            line: trimmed.slice(0, 500)
+          });
+        }
       });
-    }
+    });
 
-    onLine(line);
-  });
-});
-
+    // ─────────────────────────────────────────────
+    // PROCESS CLOSED
+    // ─────────────────────────────────────────────
     proc.on('close', code => {
-      if (item) item.proc = null;
+      if (item) {
+        item.proc = null;
+      }
+
       if (item?.cancelled) {
-        log.warn(FN, 'Download cancelled by user', { downloadId });
+        log.warn(FN, 'Download cancelled by user', {
+          downloadId
+        });
+
         return reject(new Error('Cancelled'));
       }
+
       if (code !== 0 && code !== null) {
-        const errTail = (stderr || stdout).trim().split('\n').slice(-8).join('\n');
+        const output = (stderr || stdout).trim();
+
+        const lines = output
+          .split(/\r?\n/)
+          .map(line => line.trim())
+          .filter(Boolean);
+
+        /*
+         * Prefer an actual ERROR line instead of blindly returning
+         * the final eight lines.
+         */
+        const errorLine =
+          [...lines]
+            .reverse()
+            .find(line => /^ERROR:/i.test(line)) ||
+          lines[lines.length - 1] ||
+          'Unknown error';
+
         log.error(FN, `Process exited ${code}`, {
           downloadId,
           exitCode: code,
-          stderr: stderr.trim().slice(0, 2000) || '(empty)',
-          stdout: stdout.trim().slice(0, 500) || '(empty)',
+          error: errorLine.slice(0, 2000),
+          stderr: stderr.trim().slice(0, 3000),
+          stdout: stdout.trim().slice(0, 1000),
           files
         });
-        return reject(new Error(`${path.basename(bin)} exited ${code}: ${errTail}`));
+
+        return reject(
+          new Error(
+            `${path.basename(bin)} exited ${code}: ${errorLine}`
+          )
+        );
       }
-      // log.download(FN, 'complete', { downloadId, exitCode: code, files, stdoutBytes: stdout.length, stderrBytes: stderr.length });
-        if (!isFFmpeg) {
-  log.download(FN, 'complete', {
-    downloadId,
-    exitCode: code,
-    files,
-    stdoutBytes: stdout.length,
-    stderrBytes: stderr.length
-  });
+
+      // ─────────────────────────────────────────────
+      // SUCCESS
+      // ─────────────────────────────────────────────
+      if (!isFFmpeg) {
+        log.download(FN, 'complete', {
+          downloadId,
+          exitCode: code,
+          files,
+          stdoutBytes: stdout.length,
+          stderrBytes: stderr.length
+        });
+      }
+
+      // ─────────────────────────────────────────────
+      // Remove subtitle sidecars after successful
+      // --embed-subs operation.
+      // ─────────────────────────────────────────────
+      const hasEmbedSubs = args.some(
+  arg => arg === '--embed-subs'
+);
+
+if (isYtDlp && hasEmbedSubs) {
+  const subtitleExtensions = new Set([
+    '.srt',
+    '.vtt',
+    '.ass',
+    '.ssa'
+  ]);
+
+  const subtitleFiles = new Set();
+
+  // Look for subtitle files associated with every
+  // downloaded/merged output file.
+  for (const file of files) {
+    if (!file || typeof file !== 'string') continue;
+
+    const fullPath = path.resolve(file);
+    const dir = path.dirname(fullPath);
+    const filename = path.basename(fullPath);
+    const ext = path.extname(filename);
+
+    if (!ext) continue;
+
+    const baseName = filename.slice(
+      0,
+      -ext.length
+    );
+
+    try {
+      if (!fs.existsSync(dir)) continue;
+
+      for (const name of fs.readdirSync(dir)) {
+        const candidateExt = path.extname(name).toLowerCase();
+
+        if (!subtitleExtensions.has(candidateExt)) {
+          continue;
+        }
+
+        /*
+         * Matches:
+         *
+         * Video [ID].srt
+         * Video [ID].en.srt
+         * Video [ID].en-US.srt
+         * Video [ID].vtt
+         *
+         * but does NOT delete unrelated subtitle files.
+         */
+        if (
+          name === `${baseName}${candidateExt}` ||
+          name.startsWith(`${baseName}.`)
+        ) {
+          subtitleFiles.add(
+            path.join(dir, name)
+          );
+        }
+      }
+    } catch (err) {
+      log.warn(
+        FN,
+        'Failed to scan for subtitle sidecars',
+        {
+          directory: dir,
+          error: err.message
+        }
+      );
+    }
+  }
+
+  // Delete only subtitle sidecars discovered
+  // next to the actual downloaded output.
+  for (const subtitleFile of subtitleFiles) {
+    try {
+      if (fs.existsSync(subtitleFile)) {
+        fs.unlinkSync(subtitleFile);
+
+        log.debug(
+          FN,
+          `Deleted embedded-subtitle sidecar: ${path.basename(subtitleFile)}`
+        );
+      }
+    } catch (err) {
+      log.warn(
+        FN,
+        'Failed to delete subtitle sidecar',
+        {
+          subtitleFile,
+          error: err.message
+        }
+      );
+    }
+  }
 }
-      resolve({ success: true, file: files[files.length - 1] || null, files, stdout, stderr });
+
+      resolve({
+        success: true,
+        file: files[files.length - 1] || null,
+        files,
+        stdout,
+        stderr
+      });
     });
 
+    // ─────────────────────────────────────────────
+    // PROCESS ERROR
+    // ─────────────────────────────────────────────
     proc.on('error', err => {
-      if (item) item.proc = null;
-      log.error(FN, `Cannot start process: ${err.message}`, { downloadId, bin, errorCode: err.code });
-      reject(new Error(`Cannot start ${path.basename(bin)}: ${err.message}`));
+      if (item) {
+        item.proc = null;
+      }
+
+      log.error(
+        FN,
+        `Cannot start process: ${err.message}`,
+        {
+          downloadId,
+          bin,
+          errorCode: err.code
+        }
+      );
+
+      reject(
+        new Error(
+          `Cannot start ${path.basename(bin)}: ${err.message}`
+        )
+      );
     });
   });
 }
@@ -467,110 +957,691 @@ function runGalleryDl(args, downloadId, item, outputDir = null) {
 
 // ── YouTube ───────────────────────────────────────────────────────────────────
 
+// async function downloadYouTubeVideo(url, options = {}, downloadId, item) {
+//   const settings = getSettings().youtube || {};
+//   const ytBase = ytRootBase(options, settings);
+//   const folder = ensureFolder(path.join(ytBase, 'Videos'));
+//   const quality  = options.quality || settings.defaultQuality || 'recommended';
+
+//   let formatStr;
+//   if (quality === 'recommended') {
+//     formatStr = [
+//       'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]',
+//       'bestvideo[height<=720]+bestaudio',
+//       'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]',
+//       'bestvideo[height<=480]+bestaudio',
+//       'best[height<=720]', 'best'
+//     ].join('/');
+//   } else if (quality === 'best') {
+//     formatStr = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best';
+//   } else {
+//     const h = parseInt(quality) || 720;
+//     formatStr = [
+//       `bestvideo[height<=${h}][ext=mp4]+bestaudio[ext=m4a]`,
+//       `bestvideo[height<=${h}]+bestaudio`,
+//       `best[height<=${h}]`, 'best'
+//     ].join('/');
+//   }
+
+//   const args = [
+//     '--format', formatStr,
+//     '--merge-output-format', 'mp4',
+//     '--ffmpeg-location', getFfmpegBin(),
+//     '--output', path.join(folder, '%(title)s [%(id)s].%(ext)s'),
+//     '--no-playlist',
+//     '--convert-thumbnails', 'jpg',
+//     '--embed-thumbnail',
+//     '--add-metadata',
+//     '--progress', '--newline', '--no-warnings',
+//     url
+//   ];
+//   args.push(...getCookiesArgs('yt-dlp'));
+//   if (settings.sponsorBlock) args.push('--sponsorblock-remove', 'all');
+//   if (settings.customArgs) args.push(...settings.customArgs.trim().split(/\s+/).filter(Boolean));
+
+//   return runYtDlp(args, downloadId, item);
+// }   original
+
 async function downloadYouTubeVideo(url, options = {}, downloadId, item) {
   const settings = getSettings().youtube || {};
   const ytBase = ytRootBase(options, settings);
   const folder = ensureFolder(path.join(ytBase, 'Videos'));
-  const quality  = options.quality || settings.defaultQuality || 'recommended';
+
+  const quality =
+    options.quality ||
+    settings.defaultQuality ||
+    'recommended';
 
   let formatStr;
-  if (quality === 'recommended') {
-    formatStr = [
-      'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]',
-      'bestvideo[height<=720]+bestaudio',
-      'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]',
-      'bestvideo[height<=480]+bestaudio',
-      'best[height<=720]', 'best'
-    ].join('/');
-  } else if (quality === 'best') {
-    formatStr = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best';
+
+  if (quality === 'best') {
+    formatStr = 'bestvideo+bestaudio/best';
   } else {
-    const h = parseInt(quality) || 720;
-    formatStr = [
-      `bestvideo[height<=${h}][ext=mp4]+bestaudio[ext=m4a]`,
-      `bestvideo[height<=${h}]+bestaudio`,
-      `best[height<=${h}]`, 'best'
-    ].join('/');
+    const h =
+      quality === 'recommended'
+        ? 720
+        : parseInt(quality) || 720;
+
+    formatStr =
+      `bestvideo[height<=${h}]+bestaudio/best[height<=${h}]`;
   }
 
   const args = [
     '--format', formatStr,
+
     '--merge-output-format', 'mp4',
     '--ffmpeg-location', getFfmpegBin(),
-    '--output', path.join(folder, '%(title)s [%(id)s].%(ext)s'),
+
+    '--output',
+    path.join(folder, '%(title)s [%(id)s].%(ext)s'),
+
     '--no-playlist',
-    '--convert-thumbnails', 'jpg', 
+
+    '--convert-thumbnails', 'jpg',
     '--embed-thumbnail',
-    '--add-metadata', 
-    '--progress', '--newline', '--no-warnings',
+    '--add-metadata',
+
+    '--progress',
+    '--newline',
+    '--no-warnings',
+
     url
   ];
-  args.push(...getCookiesArgs('yt-dlp'));
-  if (settings.sponsorBlock) args.push('--sponsorblock-remove', 'all');
-  if (settings.customArgs) args.push(...settings.customArgs.trim().split(/\s+/).filter(Boolean));
 
-  return runYtDlp(args, downloadId, item);
+  args.push(...getCookiesArgs('yt-dlp'));
+
+  if (settings.sponsorBlock) {
+    args.push(
+      '--sponsorblock-remove',
+      'all'
+    );
+  }
+
+  if (settings.customArgs) {
+    args.push(
+      ...settings.customArgs
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+    );
+  }
+
+  return runYtDlp(
+    args,
+    downloadId,
+    item
+  );
 }
+
+
+// async function downloadYouTubeVideoWithSubs(url, options = {}, downloadId, item) {
+//   const settings = getSettings().youtube || {};
+//   const ytBase = ytRootBase(options, settings);
+//   const folder = ensureFolder(path.join(ytBase, 'Videos'));
+
+//   const quality = options.quality || 'recommended';
+//   const subsOnly = options.subsOnly || false;
+//   const subLang =
+//     options.subLang ||
+//     options.subtitleLang ||
+//     settings.autoSubtitleLang ||
+//     'en,en-US,en-GB';
+
+//   const h =
+//     quality === 'recommended'
+//       ? 720
+//       : quality === 'best'
+//         ? 9999
+//         : parseInt(quality) || 720;
+
+//   // Subtitle-only download
+//   if (subsOnly) {
+//     const args = [
+//       '--skip-download',
+//       '--write-subs',
+//       '--write-auto-subs',
+//       '--sub-langs', subLang,
+//       '--sub-format', 'srt/vtt/best',
+//       '--output', path.join(folder, '%(title)s [%(id)s].%(ext)s'),
+//       '--no-playlist',
+//       '--no-warnings',
+//       url
+//     ];
+
+//     args.push(...getCookiesArgs('yt-dlp'));
+
+//     return runYtDlp(args, downloadId, item);
+//   }
+
+//   /*
+//    * Try format strategies in order.
+//    *
+//    * IMPORTANT:
+//    * Do not force android_vr here.
+//    * It only exposed 360p for your test video without a PO token.
+//    */
+
+//   const formatCandidates = h >= 9999
+//     ? [
+//         'bestvideo+bestaudio/best',
+//         'best'
+//       ]
+//     : [
+//         `bestvideo[height<=${h}]+bestaudio/best[height<=${h}]/best`,
+//         `best[height<=${h}]/best`
+//       ];
+
+//   let lastError = null;
+
+//   for (let attempt = 0; attempt < formatCandidates.length; attempt++) {
+//     const formatStr = formatCandidates[attempt];
+
+//     const args = [
+//       '--format', formatStr,
+
+//       // MKV is intentional because it can contain embedded subtitles
+//       // without requiring subtitle conversion to another container.
+//       '--merge-output-format', 'mkv',
+
+//       '--ffmpeg-location', getFfmpegBin(),
+
+//       // Download and embed subtitles
+//       '--write-subs',
+//       '--write-auto-subs',
+//       '--sub-langs', subLang,
+//       '--sub-format', 'srt/vtt/best',
+//       '--embed-subs',
+
+//       '--output',
+//       path.join(folder, '%(title)s [%(id)s].%(ext)s'),
+
+//       '--no-playlist',
+//       '--add-metadata',
+//       '--progress',
+//       '--newline',
+//       '--no-warnings',
+
+//       url
+//     ];
+
+//     args.push(...getCookiesArgs('yt-dlp'));
+
+//     if (settings.sponsorBlock) {
+//       args.push('--sponsorblock-remove', 'all');
+//     }
+
+//     try {
+//       log.info(
+//         'downloadYouTubeVideoWithSubs',
+//         `Attempt ${attempt + 1}/${formatCandidates.length}`,
+//         {
+//           downloadId,
+//           quality: h,
+//           format: formatStr,
+//           subtitles: true,
+//           subLang
+//         }
+//       );
+
+//       const result = await runYtDlp(args, downloadId, item);
+
+//       return result;
+
+//     } catch (error) {
+//       lastError = error;
+
+//       const message = String(error?.message || error);
+
+//       log.warn(
+//         'downloadYouTubeVideoWithSubs',
+//         `Attempt ${attempt + 1} failed`,
+//         {
+//           downloadId,
+//           format: formatStr,
+//           error: message
+//         }
+//       );
+
+//       /*
+//        * Only try the fallback when the selected format itself
+//        * is unavailable.
+//        *
+//        * Do NOT endlessly retry authentication / network /
+//        * YouTube blocking errors with another format.
+//        */
+//       const formatUnavailable =
+//         /requested format is not available/i.test(message);
+
+//       if (!formatUnavailable) {
+//         throw error;
+//       }
+//     }
+//   }
+
+//   throw lastError || new Error('Unable to find a compatible YouTube format');
+// }
 
 async function downloadYouTubeVideoWithSubs(url, options = {}, downloadId, item) {
   const settings = getSettings().youtube || {};
   const ytBase = ytRootBase(options, settings);
-  // const titleFolder = ensureFolder(path.join(ytBase, 'Videos'));
-  const folder = ensureFolder(path.join(ytBase, 'Videos'));
-  const quality  = options.quality || 'recommended';
+  const folder = ensureFolder(
+  options.outputFolder ||
+  path.join(ytBase, 'Videos')
+);
+  const quality = options.quality || 'recommended';
   const subsOnly = options.subsOnly || false;
-  const subLang  = options.subLang  || settings.autoSubtitleLang || 'en,en-US,en-GB';
+  const subLang =
+    options.subLang ||
+    options.subtitleLang ||
+    settings.autoSubtitleLang ||
+    'en,en-US,en-GB';
 
+  // ─────────────────────────────────────────────
+  // SUBTITLES ONLY
+  // ─────────────────────────────────────────────
   if (subsOnly) {
     const args = [
       '--skip-download',
-      '--write-subs', '--write-auto-subs',
-      '--sub-langs', subLang, '--sub-format', 'srt/vtt/best',
-      '--output', path.join(folder, '%(title)s [%(id)s].%(ext)s'),
-      '--no-playlist', '--no-warnings', url
+      '--write-subs',
+      '--write-auto-subs',
+      '--sub-langs', subLang,
+      '--sub-format', 'srt/vtt/best',
+      '--output',
+      path.join(folder, '%(title)s [%(id)s].%(ext)s'),
+      '--no-playlist',
+      '--no-warnings',
+      url
     ];
+
     args.push(...getCookiesArgs('yt-dlp'));
+
     return runYtDlp(args, downloadId, item);
   }
 
-  const h = quality === 'recommended' ? 720 : quality === 'best' ? 9999 : parseInt(quality) || 720;
-  const formatStr = h >= 9999
-    ? 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best'
-    : [`bestvideo[height<=${h}][ext=mp4]+bestaudio[ext=m4a]`, `bestvideo[height<=${h}]+bestaudio`, `best[height<=${h}]`, 'best'].join('/');
+  // ─────────────────────────────────────────────
+  // SELECTED QUALITY
+  // ─────────────────────────────────────────────
+  const h =
+    quality === 'recommended'
+      ? 720
+      : quality === 'best'
+        ? 9999
+        : parseInt(quality) || 720;
 
+const formatCandidates = h >= 9999
+  ? [
+      'bestvideo+bestaudio/best',
+      'best'
+    ]
+  : [
+      `bestvideo[height<=${h}]+bestaudio/best[height<=${h}]/best`,
+      `best[height<=${h}]/best`,
+      'best'
+    ];
+
+  // ─────────────────────────────────────────────
+  // VIDEO + EMBEDDED SUBTITLES
+  // ─────────────────────────────────────────────
+let lastError = null;
+
+for (const formatStr of formatCandidates) {
   const args = [
     '--format', formatStr,
     '--merge-output-format', 'mkv',
     '--ffmpeg-location', getFfmpegBin(),
-    '--write-subs', '--write-auto-subs',
-    '--sub-langs', subLang, '--sub-format', 'srt/vtt/best', '--embed-subs',
-    '--output', path.join(folder, '%(title)s [%(id)s].%(ext)s'),
-    '--no-playlist', '--add-metadata', '--progress', '--newline', '--no-warnings', url
+
+    '--write-subs',
+    '--write-auto-subs',
+    '--sub-langs', subLang,
+    '--sub-format', 'srt/vtt/best',
+    '--embed-subs',
+
+    '--output',
+    path.join(folder, '%(title)s [%(id)s].%(ext)s'),
+
+    '--no-playlist',
+    '--add-metadata',
+    '--progress',
+    '--newline',
+    '--no-warnings',
+
+    url
   ];
+
   args.push(...getCookiesArgs('yt-dlp'));
-  if (settings.sponsorBlock) args.push('--sponsorblock-remove', 'all');
-  return runYtDlp(args, downloadId, item);
+
+  if (settings.sponsorBlock) {
+    args.push('--sponsorblock-remove', 'all');
+  }
+
+  if (settings.customArgs) {
+    args.push(
+      ...settings.customArgs
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+    );
+  }
+
+  try {
+    return await runYtDlp(args, downloadId, item);
+  } catch (error) {
+    lastError = error;
+
+    if (!/requested format is not available/i.test(
+      String(error?.message || error)
+    )) {
+      throw error;
+    }
+
+    log.warn(
+      'downloadYouTubeVideoWithSubs',
+      `Format unavailable, trying fallback`,
+      { downloadId, format: formatStr }
+    );
+  }
 }
+throw lastError || new Error('No compatible YouTube format found');
+}
+
+// async function downloadYouTubeAudio(url, options = {}, downloadId, item) {
+//   const settings = getSettings().youtube || {};
+//   const ytBase = ytRootBase(options, settings);
+//   const folder   = ensureFolder(path.join(ytBase, 'Audio'));
+//   const format   = options.format || settings.preferredAudioFormat || 'mp3';
+
+//   const args = [
+//     '--format', 'bestaudio',
+//     '--extract-audio', '--audio-format', format,
+//     '--audio-quality', format === 'mp3' ? '192' : '0',
+//     '--convert-thumbnails', 'jpg',
+//     '--embed-thumbnail', '--add-metadata',
+//     '--output', path.join(folder, '%(title)s [%(id)s].%(ext)s'),
+//     '--no-playlist', '--progress', '--newline', '--no-warnings', url
+//   ];
+//   args.push(...getCookiesArgs('yt-dlp'));
+//   if (settings.sponsorBlock) args.push('--sponsorblock-remove', 'all');
+//   if (settings.customArgs) args.push(...settings.customArgs.trim().split(/\s+/).filter(Boolean));
+//   return runYtDlp(args, downloadId, item);
+// }
+
+// async function extractPlaylistEntries(url, downloadId, _item) {
+//   const args = [
+//     '--flat-playlist',
+//     '--print-json',
+//     '--no-warnings',
+//     '--ignore-errors',
+//     url
+//   ];
+
+//   // Add cookies if needed
+//   args.push(...getCookiesArgs('yt-dlp'));
+
+//   const entries = [];
+
+//   return new Promise((resolve, reject) => {
+//     const proc = spawn(getYtDlpBin(), args, {
+//     windowsHide: true
+//     });
+
+//     let stdout = '';
+//     let stderr = '';
+
+//     proc.stdout.on('data', (data) => {
+//       stdout += data.toString();
+//     });
+
+//     proc.stderr.on('data', (data) => {
+//       stderr += data.toString();
+//     });
+
+//     proc.on('close', (code) => {
+//       if (code === 0) {
+//         try {
+//           // Parse each line as JSON
+//           const lines = stdout.trim().split('\n');
+//           for (const line of lines) {
+//             if (line.trim()) {
+//               try {
+//                 const entry = JSON.parse(line);
+//                 if (entry.id) {
+//                   entries.push({
+//                     id: entry.id,
+//                     title: entry.title || `Video ${entry.id}`,
+//                     url: `https://www.youtube.com/watch?v=${entry.id}`
+//                   });
+//                 }
+//               } catch (e) {
+//                 // Skip invalid JSON lines
+//                 log.warn('extractPlaylistEntries', `Failed to parse line: ${line.substring(0, 100)}`, {
+//                   downloadId,
+//                   error: e.message
+//                 });
+//               }
+//             }
+//           }
+//           resolve(entries);
+//         } catch (e) {
+//           log.error('extractPlaylistEntries', 'Failed to parse playlist output', {
+//             downloadId,
+//             error: e.message
+//           });
+//           reject(e);
+//         }
+//       } else {
+//         log.error('extractPlaylistEntries', 'yt-dlp failed', {
+//           downloadId,
+//           code,
+//           stderr: stderr.substring(0, 500)
+//         });
+//         reject(new Error(`yt-dlp exited with code ${code}`));
+//       }
+//     });
+
+//     proc.on('error', (err) => {
+//       log.error('extractPlaylistEntries', 'Failed to spawn process', {
+//         downloadId,
+//         error: err.message
+//       });
+//       reject(err);
+//     });
+//   });
+// }
 
 async function downloadYouTubeAudio(url, options = {}, downloadId, item) {
   const settings = getSettings().youtube || {};
   const ytBase = ytRootBase(options, settings);
-  const folder   = ensureFolder(path.join(ytBase, 'Audio'));
-  const format   = options.format || settings.preferredAudioFormat || 'mp3';
+  const folder = ensureFolder(path.join(ytBase, 'Audio'));
+  const format = options.format || settings.preferredAudioFormat || 'mp3';
 
   const args = [
     '--format', 'bestaudio',
-    '--extract-audio', '--audio-format', format,
+    '--extract-audio',
+    '--audio-format', format,
     '--audio-quality', format === 'mp3' ? '192' : '0',
     '--convert-thumbnails', 'jpg',
-    '--embed-thumbnail', '--add-metadata',
+    '--embed-thumbnail',
+    '--add-metadata',
     '--output', path.join(folder, '%(title)s [%(id)s].%(ext)s'),
-    '--no-playlist', '--progress', '--newline', '--no-warnings', url
+    '--no-playlist',
+    '--progress',
+    '--newline',
+    '--no-warnings',
+    url
   ];
+
   args.push(...getCookiesArgs('yt-dlp'));
-  if (settings.sponsorBlock) args.push('--sponsorblock-remove', 'all');
-  if (settings.customArgs) args.push(...settings.customArgs.trim().split(/\s+/).filter(Boolean));
+
+  if (settings.sponsorBlock) {
+    args.push('--sponsorblock-remove', 'all');
+  }
+
+  if (settings.customArgs) {
+    args.push(
+      ...settings.customArgs
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+    );
+  }
+
   return runYtDlp(args, downloadId, item);
+}
+
+async function extractPlaylistEntries(url, downloadId, _item) {
+  const FN = 'extractPlaylistEntries';
+
+  const args = [
+    '--flat-playlist',
+    '--print-json',
+    '--no-warnings',
+    '--ignore-errors',
+    '--skip-download',
+    url
+  ];
+
+  // Use the same cookies configuration as the rest of the YouTube downloader.
+  args.push(...getCookiesArgs('yt-dlp'));
+
+  const entries = [];
+  const seenIds = new Set();
+
+  return new Promise((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+
+    const proc = spawn(getYtDlpBin(), args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      fn(value);
+    };
+
+    proc.stdout.setEncoding('utf8');
+    proc.stderr.setEncoding('utf8');
+
+    proc.stdout.on('data', data => {
+      stdout += data.toString();
+    });
+
+    proc.stderr.on('data', data => {
+      stderr += data.toString();
+    });
+
+    proc.on('error', err => {
+      log.error(FN, 'Failed to spawn yt-dlp', {
+        downloadId,
+        bin: getYtDlpBin(),
+        error: err.message,
+        code: err.code
+      });
+
+      finish(reject, new Error(
+        `Failed to start yt-dlp: ${err.message}`
+      ));
+    });
+
+    proc.on('close', code => {
+      /*
+       * yt-dlp can return a non-zero exit code while still producing
+       * usable playlist entries because --ignore-errors is enabled.
+       *
+       * Therefore parse stdout BEFORE treating the process as failed.
+       */
+
+      const lines = stdout
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean);
+
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+
+          // Ignore playlist/container metadata.
+          if (!entry || entry._type === 'playlist') {
+            continue;
+          }
+
+          if (!entry.id) {
+            continue;
+          }
+
+          // Prevent duplicate videos.
+          if (seenIds.has(entry.id)) {
+            continue;
+          }
+
+          seenIds.add(entry.id);
+
+          entries.push({
+            id: entry.id,
+            title: entry.title || `Video ${entry.id}`,
+            url:
+              entry.webpage_url ||
+              entry.url ||
+              `https://www.youtube.com/watch?v=${entry.id}`,
+            playlist_index:
+              entry.playlist_index ??
+              entry.playlist_autonumber ??
+              entries.length + 1
+          });
+
+        } catch {
+          // yt-dlp may output non-JSON informational lines.
+          // Ignore them instead of failing the entire playlist.
+        }
+      }
+
+      /*
+       * If we obtained entries, consider extraction successful even if
+       * yt-dlp returned a non-zero exit code.
+       */
+      if (entries.length > 0) {
+        log.info(FN, 'Playlist entries extracted', {
+          downloadId,
+          count: entries.length,
+          exitCode: code
+        });
+
+        if (code !== 0 && code !== null) {
+          log.warn(FN, 'yt-dlp exited non-zero but usable entries were recovered', {
+            downloadId,
+            code,
+            stderr: stderr.trim().slice(0, 1000)
+          });
+        }
+
+        return finish(resolve, entries);
+      }
+
+      /*
+       * No entries means extraction genuinely failed.
+       */
+      const errorText = stderr.trim();
+
+      log.error(FN, 'No playlist entries could be extracted', {
+        downloadId,
+        code,
+        stderr: errorText.slice(0, 2000),
+        stdout: stdout.trim().slice(0, 1000)
+      });
+
+      finish(
+        reject,
+        new Error(
+          errorText
+            ? `Unable to extract playlist: ${errorText.slice(0, 500)}`
+            : `yt-dlp exited with code ${code ?? 'unknown'} and returned no playlist entries`
+        )
+      );
+    });
+  });
 }
 
 async function downloadYouTubePlaylist(url, options = {}, downloadId, item) {
@@ -579,8 +1650,14 @@ async function downloadYouTubePlaylist(url, options = {}, downloadId, item) {
   const audioOnly = options.audioOnly || false;
   const format    = options.format    || settings.preferredAudioFormat || 'mp3';
   const quality   = options.quality   || 'recommended';
-  const subtitles = options.subtitles || false;
-
+  // const subtitles = options.subtitles || false;
+  const subtitles =
+    options.subtitles === true ||
+    options.subtitle === true ||
+    options.subLang != null ||
+    options.subtitleLang != null ||
+    options.action === 'download_playlist_subs';
+  console.log('[PlaylistSubs TRACE] FINAL subtitles =', subtitles);
   const playlistName = sanitizePlaylistName(options.playlistName || item?.title || 'Playlist');
   const playlistFolder = audioOnly ? path.join(ytBase, 'Audio', playlistName) : path.join(ytBase, 'Playlists', playlistName);
   const folder = ensureFolder(playlistFolder);
@@ -588,9 +1665,9 @@ async function downloadYouTubePlaylist(url, options = {}, downloadId, item) {
   const matchFilter = 'availability != "needs_auth" & availability != "unavailable"';
   const h = quality === 'recommended' ? 720 : parseInt(quality) || 720;
 
-  let args;
+  // Handle audio-only playlists (no change to existing behavior)
   if (audioOnly) {
-    args = [
+    const args = [
       '--format', 'bestaudio',
       '--extract-audio', '--audio-format', format,
       '--audio-quality', format === 'mp3' ? '192' : '0',
@@ -600,11 +1677,21 @@ async function downloadYouTubePlaylist(url, options = {}, downloadId, item) {
       '--yes-playlist', '--match-filter', matchFilter,
       '--progress', '--newline', '--no-warnings', '--ignore-errors', url
     ];
-  } else {
-    const fmtStr = [`bestvideo[height<=${h}][ext=mp4]+bestaudio[ext=m4a]`, `bestvideo[height<=${h}]+bestaudio`, `best[height<=${h}]`, 'best'].join('/');
-    args = [
+    args.push(...getCookiesArgs('yt-dlp'));
+    if (settings.sponsorBlock) args.push('--sponsorblock-remove', 'all');
+    if (settings.customArgs) args.push(...settings.customArgs.trim().split(/\s+/).filter(Boolean));
+    const result = await runYtDlp(args, downloadId, item);
+    return result;
+  }
+
+  // Handle non-subtitle playlists (no change to existing behavior)
+  if (!subtitles) {
+    const fmtStr = h >= 9999
+  ? 'bestvideo+bestaudio/best'
+  : `bestvideo[height<=${h}]+bestaudio/best[height<=${h}]`;
+      const args = [
       '--format', fmtStr,
-      '--merge-output-format', subtitles ? 'mkv' : 'mp4',
+      '--merge-output-format', 'mp4',
       '--ffmpeg-location', getFfmpegBin(),
       '--convert-thumbnails', 'jpg',
       '--embed-thumbnail',
@@ -613,10 +1700,170 @@ async function downloadYouTubePlaylist(url, options = {}, downloadId, item) {
       '--yes-playlist', '--match-filter', matchFilter,
       '--progress', '--newline', '--no-warnings', '--ignore-errors', url
     ];
-    if (subtitles) args.push('--write-subs', '--write-auto-subs', '--sub-langs', settings.autoSubtitleLang || 'en,en-US', '--embed-subs');
+    args.push(...getCookiesArgs('yt-dlp'));
+    if (settings.sponsorBlock) args.push('--sponsorblock-remove', 'all');
+    if (settings.customArgs) args.push(...settings.customArgs.trim().split(/\s+/).filter(Boolean));
+    const result = await runYtDlp(args, downloadId, item);
+    return result;
   }
-  args.push(...getCookiesArgs('yt-dlp'));
-  return runYtDlp(args, downloadId, item);
+
+  // Handle subtitle playlists: process each video individually
+  // Initialize playlist tracking
+  if (!item.options) item.options = {};
+  item.options.playlistTotal = 0; // Will be set after extracting entries
+  item.options.playlistDownloaded = 0;
+
+  try {
+    // Extract playlist entries
+    const entries = await extractPlaylistEntries(url, downloadId, item);
+
+    if (entries.length === 0) {
+      log.warn('downloadYouTubePlaylist', 'No entries found in playlist', { downloadId });
+      return { success: true, file: null, files: [], stdout: '', stderr: '' };
+    }
+
+    item.options.playlistTotal = entries.length;
+    log.info('downloadYouTubePlaylist', `Starting download of ${entries.length} videos`, { downloadId });
+
+    // Process each video individually
+    const results = [];
+    let allFiles = [];
+    let combinedStdout = '';
+    let combinedStderr = '';
+
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      const videoUrl = entry.url;
+
+      // Check for cancellation before each video
+      if (item?.cancelled) {
+        log.warn('downloadYouTubePlaylist', 'Cancelled by user', { downloadId });
+        return { success: false, error: 'Cancelled' };
+      }
+
+      log.info('downloadYouTubePlaylist', `Downloading video ${i + 1}/${entries.length}: ${entry.title}`, { downloadId });
+
+      // Download individual video with subtitles
+      const videoResult = await downloadYouTubeVideoWithSubs(
+  videoUrl,
+  {
+    quality: options.quality,
+    subLang: options.subLang ||
+      settings.autoSubtitleLang ||
+      'en,en-US,en-GB',
+
+    // Keep playlist videos inside:
+    // YT/Playlists/{playlistname}/
+    outputFolder: folder
+  },
+  downloadId,
+  item
+);
+
+
+      // Collect results
+      results.push(videoResult);
+      if (videoResult.file) allFiles.push(videoResult.file);
+      if (videoResult.files) allFiles = [...allFiles, ...videoResult.files];
+      if (videoResult.stdout) combinedStdout += videoResult.stdout + '\n';
+      if (videoResult.stderr) combinedStderr += videoResult.stderr + '\n';
+
+      // Update playlist progress
+      item.options.playlistDownloaded = i + 1;
+
+      try {
+        const meta = {
+          playlistDownloaded: item.options.playlistDownloaded,
+          playlistTotal: item.options.playlistTotal,
+          playlistName: item.options.playlistName || item.title || playlistName
+        };
+
+        // Broadcast progress with 100% for completed video, but reset for next video
+        broadcastProgress(
+          downloadId,
+          {
+            percent: 100, // Show completed for this video
+            speed: null,
+            eta: null,
+            totalSize: null
+          },
+          meta,
+          true
+        );
+      } catch (e) {
+        log.warn('downloadYouTubePlaylist', 'Failed to broadcast playlist progress', { error: e.message });
+      }
+
+      log.info('downloadYouTubePlaylist', `Completed video ${i + 1}/${entries.length}`, {
+        downloadId,
+        playlistDownloaded: item.options.playlistDownloaded,
+        playlistTotal: item.options.playlistTotal
+      });
+    }
+
+    // Final progress update
+    try {
+      const meta = {
+        playlistDownloaded: item.options.playlistTotal,
+        playlistTotal: item.options.playlistTotal,
+        playlistName: item.options.playlistName || item.title || playlistName
+      };
+
+      broadcastProgress(
+        downloadId,
+        {
+          percent: 100,
+          speed: null,
+          eta: null,
+          totalSize: null
+        },
+        meta,
+        true
+      );
+    } catch (e) {
+      log.warn('downloadYouTubePlaylist', 'Failed to broadcast final playlist progress', { error: e.message });
+    }
+
+    log.info('downloadYouTubePlaylist', `Completed playlist download: ${item.options.playlistTotal}/${item.options.playlistTotal} videos`, { downloadId });
+
+    return {
+      success: true,
+      file: allFiles.length > 0 ? allFiles[allFiles.length - 1] : null,
+      files: allFiles,
+      stdout: combinedStdout,
+      stderr: combinedStderr
+    };
+  } catch (error) {
+    log.error('downloadYouTubePlaylist', 'Failed to download playlist', {
+      downloadId,
+      error: error.message
+    });
+
+    // Try to broadcast error progress
+    try {
+      const meta = {
+        playlistDownloaded: item.options.playlistDownloaded || 0,
+        playlistTotal: item.options.playlistTotal || 0,
+        playlistName: item.options.playlistName || item.title || playlistName
+      };
+
+      broadcastProgress(
+        downloadId,
+        {
+          percent: 0,
+          speed: null,
+          eta: null,
+          totalSize: null
+        },
+        meta,
+        true
+      );
+    } catch (e) {
+      // Ignore broadcast errors
+    }
+
+    throw error;
+  }
 }
 
 // ── Instagram ─────────────────────────────────────────────────────────────────
@@ -699,9 +1946,8 @@ async function downloadInstagramPhoto(url, options = {}, downloadId, item) {
     //             item.tempFiles.push(processedPath);
     //           }
     //         }
-    //       }
 
-    //       // Rename file to use mediaId
+    //         // Rename file to use mediaId
     //       const newName = `${mediaId}_${String(index + 1).padStart(2, '0')}${path.extname(processedPath)}`;
     //       const newPath = path.join(dir, newName);
     //       try {
@@ -734,7 +1980,7 @@ async function downloadInstagramPhoto(url, options = {}, downloadId, item) {
     // }
 
     ///////////////////////////////////////
-    if (Array.isArray(result.files) && result.files.length) {
+  if (Array.isArray(result.files) && result.files.length) {
   let filePath = result.files[0];
 
   // Convert WebP to JPG if needed
@@ -1055,7 +2301,6 @@ async function downloadInstagramCarouselAll(url, options = {}, downloadId, item)
 
 async function downloadInstagramCarouselFiltered(url, slideIndices, options = {}, downloadId, item) {
   const settings    = getSettings().instagram || {};
-  const title       = sanitizeFilename(options.title || 'Carousel');
   const carouselDir = ensureFolder(path.join(
     options.folder || settings.downloadFolder || path.join(os.homedir(), 'Downloads', 'GrabIt', 'Instagram'),
     'Carousels'
@@ -1090,7 +2335,7 @@ async function downloadInstagramCarouselFiltered(url, slideIndices, options = {}
   // Convert any WebP images to JPG
   if (Array.isArray(result.files) && result.files.length) {
     const converted = await Promise.all(
-      result.files.map(async (filePath, index) => {
+      result.files.map(async (filePath) => {
         const ext = path.extname(filePath).toLowerCase();
         if (ext === '.webp') {
           const jpgPath = await convertWebpToJpg(filePath, item, downloadId);

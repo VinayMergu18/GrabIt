@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "GrabIt",
   "version": "4.0.0",
-  "description": "Download YouTube, Instagram, and any media \u00e2\u20ac\u201d fast.",
+  "description": "Download YouTube, Instagram, and any media  — fast.",
   "permissions": [
     "activeTab",
     "storage",
@@ -16,7 +16,6 @@
     "unlimitedStorage"
   ],
   "host_permissions": [
-    "http://127.0.0.1:7272/*",
     "*://*/*"
   ],
   "background": {
@@ -118,107 +117,6 @@
         "*://*.vk.ru/*",
         "*://*.vkvideo.ru/*",
         "*://live.vkvideo.ru/*"
-      ],
-      "run_at": "document_end",
-      "world": "ISOLATED"
-    },
-    {
-      "all_frames": true,
-      "js": [
-        "scripts/content/detectors/canva.js"
-      ],
-      "matches": [
-        "*://*.canva.com/*"
-      ],
-      "run_at": "document_end",
-      "world": "ISOLATED"
-    },
-    {
-      "all_frames": true,
-      "js": [
-        "scripts/content/detectors/iq.js"
-      ],
-      "matches": [
-        "*://*.iq.com/*"
-      ],
-      "run_at": "document_end",
-      "world": "ISOLATED"
-    },
-    {
-      "all_frames": true,
-      "js": [
-        "scripts/content/detectors/iq_untrusted.js"
-      ],
-      "matches": [
-        "*://*.iq.com/*"
-      ],
-      "run_at": "document_end",
-      "world": "MAIN"
-    },
-    {
-      "all_frames": true,
-      "js": [
-        "scripts/content/detectors/twitcasting.js"
-      ],
-      "matches": [
-        "*://*.twitcasting.tv/*"
-      ],
-      "run_at": "document_end",
-      "world": "ISOLATED"
-    },
-    {
-      "all_frames": true,
-      "js": [
-        "scripts/content/detectors/bilibili.js"
-      ],
-      "matches": [
-        "*://*.bilibili.tv/*",
-        "*://*.bilibili.com/*"
-      ],
-      "run_at": "document_end",
-      "world": "ISOLATED"
-    },
-    {
-      "all_frames": true,
-      "js": [
-        "scripts/content/detectors/bilibili_untrusted.js"
-      ],
-      "matches": [
-        "*://*.bilibili.tv/*",
-        "*://*.bilibili.com/*"
-      ],
-      "run_at": "document_end",
-      "world": "MAIN"
-    },
-    {
-      "all_frames": true,
-      "js": [
-        "scripts/content/detectors/taiav.js"
-      ],
-      "matches": [
-        "*://*.taiav.com/*"
-      ],
-      "run_at": "document_end",
-      "world": "MAIN"
-    },
-    {
-      "all_frames": true,
-      "js": [
-        "scripts/content/detectors/osmosis.js"
-      ],
-      "matches": [
-        "*://*.osmosis.org/*"
-      ],
-      "run_at": "document_end",
-      "world": "ISOLATED"
-    },
-    {
-      "all_frames": true,
-      "js": [
-        "scripts/content/detectors/kick.js"
-      ],
-      "matches": [
-        "*://*.kick.com/*"
       ],
       "run_at": "document_end",
       "world": "ISOLATED"

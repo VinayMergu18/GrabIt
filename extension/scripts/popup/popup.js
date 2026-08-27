@@ -7,8 +7,6 @@
  * - Settings management
  */
 
-const SERVER = 'http://127.0.0.1:7272';
-const WS_URL = 'ws://127.0.0.1:7272';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const state = {
@@ -42,7 +40,10 @@ window.addEventListener('unload', () => {
   previewObjectUrls.clear();
 });
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Server ─────────────────────────────────────────────────────────────────────
+const SERVER = 'http://127.0.0.1:7272';
+const WS_URL = 'ws://127.0.0.1:7272';
+
 async function api(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
   if (body) opts.body = JSON.stringify(body);
@@ -422,13 +423,16 @@ function handleWSMessage(msg) {
     if (msg.tabId === state.currentTabId) {
       updatePlaylistProgress(msg);
       // Save progress to storage
-      savePlaylistProgress(state.currentTabId, msg.playlistId, {
-        completed: msg.completed,
-        total: msg.total,
-        videoTotals: msg.videoTotals,
-        audioTotals: msg.audioTotals,
-        totalDuration: msg.totalDuration
-      });
+savePlaylistProgress(state.currentTabId, msg.playlistId, {
+  completed: msg.completed,
+  total: msg.total,
+  videoTotals: msg.videoTotals || {},
+  subtitleTotals: msg.subtitleTotals || {},
+  audioTotals: msg.audioTotals || {},
+  totalDuration: msg.totalDuration || 0,
+  subtitleInfo: msg.subtitleInfo || null,
+  done: msg.done ?? false
+});
     }
   }
   if (msg.type === 'streams_updated') {
@@ -531,10 +535,12 @@ async function probeYT(url) {
           tabId: state.currentTabId,
           completed: saved.completed,
           total: saved.total,
-          videoTotals: saved.videoTotals,
-          audioTotals: saved.audioTotals,
-          totalDuration: saved.totalDuration,
-          done: false // Assume still in progress unless we have a way to know
+          videoTotals: saved.videoTotals || {},
+          subtitleTotals: saved.subtitleTotals || {},
+          audioTotals: saved.audioTotals || {},
+          subtitleInfo: saved.subtitleInfo || null,
+          totalDuration: saved.totalDuration || 0,
+          done: saved.done ?? false // Assume still in progress unless we have a way to know
         };
         updatePlaylistProgress(msg);
       }
@@ -835,8 +841,9 @@ function _defaultAudioFmts() {
 
 // ── Playlist panel ────────────────────────────────────────────────────────────
 function renderYTPlaylistUI(probe) {
-  const vt  = probe.videoTotals  || {};
-  const at  = probe.audioTotals  || {};
+  const vt = probe.videoTotals || {};
+  const st = probe.subtitleTotals || {};
+  const at = probe.audioTotals || {};
   const cnt = probe.itemCount    ?? '?';
   const dur = probe.duration     ? `· ${fmtDuration(probe.duration)}` : '';
   const langs = (probe.subtitleInfo && probe.subtitleInfo.languages) || probe.subtitleLangs || [];
@@ -863,7 +870,7 @@ function renderYTPlaylistUI(probe) {
   const subsVideoRows = qualities.map(({ h, label }) => `
     <button class="yt-quality-row" data-pl-action="download_playlist_subs" data-quality="${h}">
       <span class="yt-q-label">${label}</span>
-      <span class="yt-q-size" id="pl-vs-${h}" title="Total size for all ${cnt} videos">${fmtSize(vt[h]) || '?'}</span>
+      <span class="yt-q-size" id="pl-vs-${h}" title="Total size for all ${cnt} videos">${fmtSize((probe.videoTotals?.[h] || 0) + (probe.subtitleTotals?.[h] || 0)) || '?'}</span>
     </button>`).join('');
 
   // Audio-only rows
@@ -940,18 +947,48 @@ function renderYTPlaylistUI(probe) {
  * Updates the size cells and progress bar without re-rendering the whole panel.
  */
 function updatePlaylistProgress(msg) {
-  const vt = msg.videoTotals  || {};
-  const at = msg.audioTotals  || {};
+  const vt = msg.videoTotals || {};
+  const st = msg.subtitleTotals || {};
+  const at = msg.audioTotals || {};
 
-  // Update size cells in both Video and Video+Subs panels
-  for (const [h, bytes] of Object.entries(vt)) {
-    if (bytes > 0) {
-      const videoEl = document.getElementById(`pl-v-${h}`);
-      if (videoEl) videoEl.textContent = fmtSize(bytes);
-      const subsEl = document.getElementById(`pl-vs-${h}`);
-      if (subsEl) subsEl.textContent = fmtSize(bytes);
+  // Keep the live playlist totals in the main probe state.
+  // This is important because renderYTFull() uses state.ytProbe.
+  if (state.ytProbe) {
+    state.ytProbe.videoTotals = { ...vt };
+    state.ytProbe.subtitleTotals = { ...st };
+    state.ytProbe.audioTotals = { ...at };
+
+    if (msg.totalDuration != null) {
+      state.ytProbe.duration = msg.totalDuration;
     }
   }
+  // Update playlist subtitle information discovered by the worker.
+  if (msg.subtitleInfo && state.ytProbe) {
+    state.ytProbe.subtitleInfo = msg.subtitleInfo;
+    state.ytProbe.subtitleLangs =
+      (msg.subtitleInfo.languages || []).map(l => l.code);
+    state.ytProbe.hasSubtitles =
+      Boolean(msg.subtitleInfo.hasSubtitles);
+  }
+
+  // Update size cells in both Video and Video+Subs panels
+  for (const [h, videoBytes] of Object.entries(vt)) {
+    // Update Video tab
+    if (videoBytes > 0) {
+      const videoEl = document.getElementById(`pl-v-${h}`);
+      if (videoEl) videoEl.textContent = fmtSize(videoBytes);
+    }
+
+    // Update Video+Subs tab: video size + subtitle overhead
+    const subtitleBytes = st[h] || 0;
+    const totalBytes = videoBytes + subtitleBytes;
+    if (totalBytes > 0) {
+      const subsEl = document.getElementById(`pl-vs-${h}`);
+      if (subsEl) subsEl.textContent = fmtSize(totalBytes);
+    }
+  }
+
+  // Update audio sizes
   for (const [fmt, bytes] of Object.entries(at)) {
     if (bytes > 0) {
       const el = document.getElementById(`pl-a-${fmt}`);
@@ -959,32 +996,71 @@ function updatePlaylistProgress(msg) {
     }
   }
 
-  // Progress bars (one in Video panel, one cloned in Subs panel)
-  const updateBar = (barId, fillId, labelId) => {
-    const bar   = document.getElementById(barId);
-    const fill  = document.getElementById(fillId);
-    const label = document.getElementById(labelId);
-    if (!bar || !msg.total) return;
-    bar.style.display = msg.done ? 'none' : 'block';
-    const pct = Math.round((msg.completed / msg.total) * 100);
-    if (fill)  fill.style.width = pct + '%';
-    if (label) label.textContent = msg.done
-      ? ''
-      : `Scanning ${msg.completed}/${msg.total} videos (${pct}%)…`;
-  };
-  updateBar('pl-progress-bar',      'pl-progress-fill',      'pl-progress-label');
-  updateBar('pl-progress-subs-bar', 'pl-progress-subs-fill', 'pl-progress-subs-label');
+  // ── Subtitle information from playlist worker ───────────────────────
+  if (msg.subtitleInfo) {
+    const subtitleInfo = msg.subtitleInfo;
 
-  // Remove the "Calculating…" tag once done
+    if (state.ytProbe) {
+      state.ytProbe.subtitleInfo = subtitleInfo;
+      state.ytProbe.subtitleLangs =
+        (subtitleInfo.languages || []).map(l => l.code);
+      state.ytProbe.hasSubtitles =
+        Boolean(subtitleInfo.hasSubtitles &&
+                subtitleInfo.languages?.length);
+    }
+
+    // Once scanning is complete, rebuild the playlist UI so the
+    // Video+Subs tab receives the discovered languages.
+    if (msg.done && state.ytProbe) {
+      renderYTFull(state.ytProbe, state.currentUrl);
+    }
+  }
+
+  // Progress bars
+  const updateBar = (barId, fillId, labelId) => {
+    const bar = document.getElementById(barId);
+    const fill = document.getElementById(fillId);
+    const label = document.getElementById(labelId);
+
+    if (!bar || !msg.total) return;
+
+    bar.style.display = msg.done ? 'none' : 'block';
+
+    const pct = Math.round((msg.completed / msg.total) * 100);
+
+    if (fill) fill.style.width = pct + '%';
+
+    if (label) {
+      label.textContent = msg.done
+        ? ''
+        : `Scanning ${msg.completed}/${msg.total} videos (${pct}%)…`;
+    }
+  };
+
+  updateBar(
+    'pl-progress-bar',
+    'pl-progress-fill',
+    'pl-progress-label'
+  );
+
+  updateBar(
+    'pl-progress-subs-bar',
+    'pl-progress-subs-fill',
+    'pl-progress-subs-label'
+  );
+
+  // Remove "Calculating…" tag once done
   if (msg.done) {
     const tag = document.getElementById('pl-loading-tag');
     if (tag) tag.remove();
   }
 
-  // Update total duration label if provided by the worker
+  // Update total duration
   if (msg.totalDuration) {
     const probeDur = document.getElementById('pl-duration');
-    if (probeDur) probeDur.textContent = fmtDuration(msg.totalDuration);
+    if (probeDur) {
+      probeDur.textContent = fmtDuration(msg.totalDuration);
+    }
   }
 }
 
@@ -1019,16 +1095,44 @@ function wireYTTabs(probe, url) {
 
 function wireYTPlaylist(probe, url) {
   // Tab switching
-  document.querySelectorAll('[data-pl-tab]').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('[data-pl-tab]').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      ['video', 'subs', 'audio'].forEach(name => {
-        const panel = document.getElementById(`pl-panel-${name}`);
-        if (panel) panel.style.display = tab.dataset.plTab === name ? 'block' : 'none';
-      });
+document.querySelectorAll('[data-pl-tab]').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('[data-pl-tab]').forEach(t =>
+      t.classList.remove('active')
+    );
+
+    tab.classList.add('active');
+
+    ['video', 'subs', 'audio'].forEach(name => {
+      const panel = document.getElementById(`pl-panel-${name}`);
+      if (panel) {
+        panel.style.display =
+          tab.dataset.plTab === name ? 'block' : 'none';
+      }
     });
+
+    // When Video+Subs is opened, always enable subtitles.
+    if (tab.dataset.plTab === 'subs') {
+      const select = document.getElementById('pl-subtitle-lang');
+
+      if (select) {
+        // English is the default.
+        const english =
+          Array.from(select.options).find(o =>
+            o.value === 'en' ||
+            o.value === 'en-US' ||
+            o.value === 'en-GB'
+          );
+
+        if (english) {
+          select.value = english.value;
+        } else if (select.options.length > 0 && !select.value) {
+          select.selectedIndex = 0;
+        }
+      }
+    }
   });
+});
 
   // Set up playlist subtitle language selector
   const plSubtitleSelect = document.getElementById('pl-subtitle-lang');
@@ -1053,28 +1157,54 @@ function wireYTPlaylist(probe, url) {
       selectedLang = langs[0].code;
     }
 
-    plSubtitleSelect.value = selectedLang;
+      const hasSelectedOption = Array.from(plSubtitleSelect.options)
+        .some(option => option.value === selectedLang);
 
+      if (hasSelectedOption) {
+        plSubtitleSelect.value = selectedLang;
+      } else if (plSubtitleSelect.options.length > 0) {
+        plSubtitleSelect.selectedIndex = 0;
+      }
+
+      console.log(
+        '[PlaylistSubs UI] initialized:',
+        plSubtitleSelect.value,
+        'options:',
+        Array.from(plSubtitleSelect.options).map(o => o.value)
+      );
     plSubtitleSelect.addEventListener('change', () => {
       // No need to store in state for playlist as it's used directly in the download options
     });
   }
 
   // Download actions
-  document.querySelectorAll('[data-pl-action]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const action  = btn.dataset.plAction;
-      const options = {
-        quality:  btn.dataset.quality   || '720',
-        format:   btn.dataset.audiofmt  || 'mp3',
-      };
-      if (action === 'download_playlist_subs') {
-        const langInput = document.getElementById('pl-subtitle-lang');
-        options.subtitleLang = (langInput && langInput.value.trim()) || 'en';
-      }
-      startDownload({ url, action, platform: 'youtube', title: probe.title, options });
+document.querySelectorAll('[data-pl-action]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const action = btn.dataset.plAction;
+
+    const options = {
+      quality: btn.dataset.quality || '720',
+      format: btn.dataset.audiofmt || 'mp3'
+    };
+
+    if (action === 'download_playlist_subs') {
+      const langInput = document.getElementById('pl-subtitle-lang');
+      const selectedLang = (langInput?.value || '').trim() || 'en';
+
+      options.subLang = selectedLang;
+      options.subtitleLang = selectedLang;
+      options.subtitles = true;
+    }
+
+    startDownload({
+      url,
+      action,
+      platform: 'youtube',
+      title: probe.title,
+      options
     });
   });
+});
 }
 
 // ── Web Stream Detection ──────────────────────────────────────────────────────
