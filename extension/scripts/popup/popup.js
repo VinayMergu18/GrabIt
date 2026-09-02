@@ -1262,18 +1262,72 @@ function renderStreams(container, streams) {
 
   container.innerHTML = streams.map((stream, index) => streamCard(stream, index)).join('');
 
-  // Stream-tab downloads stay inside the extension; they never use the local server.
+  // Stream-tab downloads: trigger via service worker and track in queue
   container.querySelectorAll('.stream-download').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const qualityPicker = container.querySelector(`.stream-quality-picker[data-stream-index="${btn.dataset.streamIndex}"]`);
-      btn.textContent = '⏳';
-      btn.disabled    = true;
-      chrome.runtime.sendMessage({ type: 'DOWNLOAD_STREAM_OFFLINE', streamUrl: btn.dataset.url, variantId: qualityPicker?.dataset.variantId || '' }, (result) => {
-        if (chrome.runtime.lastError || !result?.ok) {
-          toast(result?.error || chrome.runtime.lastError?.message || 'Offline download failed', 'error');
-          btn.textContent = 'Download'; btn.disabled = false;
-        } else { btn.textContent = '✓ Added'; toast('Downloading in browser', 'success'); }
-      });
+      const streamUrl = btn.dataset.url;
+      const streamIndex = btn.dataset.streamIndex;
+      const card = container.querySelector(`.stream-card[data-stream-index="${streamIndex}"]`);
+      const qualityPicker = container.querySelector(`.stream-quality-picker[data-stream-index="${streamIndex}"]`);
+      const variantId = qualityPicker?.dataset.variantId || '';
+      const abortBtn = container.querySelector(`.stream-abort[data-stream-index="${streamIndex}"]`);
+      const progressBar = card?.querySelector('.stream-progress-bar');
+
+      btn.disabled = true;
+      btn.style.opacity = '0.5';
+      if (abortBtn) abortBtn.style.display = 'block';
+      if (progressBar) progressBar.style.display = 'block';
+
+      try {
+        const result = await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Request timed out')), 30000);
+          chrome.runtime.sendMessage(
+            { type: 'DOWNLOAD_STREAM_OFFLINE', streamUrl, variantId },
+            (result) => {
+              clearTimeout(timeout);
+              if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+              else if (!result?.ok) reject(new Error(result?.error || 'Failed'));
+              else resolve(result);
+            }
+          );
+        });
+        if (result.jobId && abortBtn) abortBtn.dataset.jobId = result.jobId;
+        toast('Stream download started', 'success');
+        setTimeout(() => switchTab('queue'), 500);
+      } catch (error) {
+        console.error('[Stream] Download error:', error);
+        toast(`Error: ${error.message}`, 'error');
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        if (abortBtn) abortBtn.style.display = 'none';
+        if (progressBar) progressBar.style.display = 'none';
+      }
+    });
+  });
+
+  // Stream abort button
+  container.querySelectorAll('.stream-abort').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const jobId = btn.dataset.jobId;
+      const streamIndex = btn.dataset.streamIndex;
+      if (!jobId) { toast('Cannot cancel', 'error'); return; }
+      try {
+        await new Promise(resolve => chrome.runtime.sendMessage(
+          { type: 'OFFLINE_STREAM_QUEUE_ACTION', action: 'cancel', id: jobId },
+          resolve
+        ));
+        toast('Cancelled', 'success');
+        const card = container.querySelector(`.stream-card[data-stream-index="${streamIndex}"]`);
+        const downloadBtn = card?.querySelector('.stream-download');
+        if (downloadBtn) { downloadBtn.disabled = false; downloadBtn.style.opacity = '1'; }
+        btn.style.display = 'none';
+        const progressBar = card?.querySelector('.stream-progress-bar');
+        if (progressBar) { progressBar.style.display = 'none'; progressBar.querySelector('.stream-progress-fill').style.width = '0%'; }
+        btn.dataset.jobId = '';
+        loadQueue();
+      } catch (error) {
+        toast('Cancel failed: ' + error.message, 'error');
+      }
     });
   });
   container.querySelectorAll('.stream-quality-picker').forEach(picker => {
@@ -1379,13 +1433,24 @@ function streamCard(stream, index) {
         <button type="button" class="stream-quality-picker" data-stream-index="${index}" data-variant-id="${escHtml(variants[0].id)}" aria-label="Available qualities" ${waitingForVariants ? 'disabled' : ''}>${escHtml(selectedLabel)}</button>
         <div class="stream-quality-menu">${options}</div>
       </div>
-      <button class="btn btn-primary stream-download" data-url="${escHtml(stream.url)}" data-stream-index="${index}" ${waitingForVariants ? 'disabled' : ''}>Download</button>
+      <div style="display:flex;gap:5px">
+        <button class="btn btn-primary stream-download" data-url="${escHtml(stream.url)}" data-stream-index="${index}" ${waitingForVariants ? 'disabled' : ''}>Download</button>
+        <button class="btn btn-secondary stream-abort" data-stream-index="${index}" style="display:none" data-url="${escHtml(stream.url)}">Cancel</button>
+      </div>
     </div>`;
-  return `<section class="stream-card">
+  return `<section class="stream-card" data-stream-url="${escHtml(stream.url)}" data-stream-index="${index}">
     <div class="stream-card-head">${previewHtml}
       <div class="stream-card-info">
         <div class="stream-card-title-line">${typeBadge(stream.type)}<span class="stream-title" title="${escHtml(stream.name)}">${escHtml(stream.name)}</span></div>
         <div class="stream-variants">${rows}</div>
+      </div>
+    </div>
+    <div class="stream-progress-bar" style="display:none;margin-top:4px">
+      <div style="height:2px;background:var(--bg4);border-radius:1px;overflow:hidden">
+        <div class="stream-progress-fill" style="height:2px;background:var(--accent);width:0%;transition:width 150ms linear;border-radius:1px"></div>
+      </div>
+      <div style="font-size:10px;color:var(--text3);margin-top:2px;text-align:right">
+        <span class="stream-progress-text"></span>
       </div>
     </div>
   </section>`;
