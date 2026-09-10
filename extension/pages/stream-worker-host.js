@@ -97,6 +97,10 @@ streamChannel.addEventListener('message', async event => {
   const message = event.data.msg;
   if (!message?.name) return;
 
+  // The LibAV worker listens on this same channel. These messages are for it,
+  // not for the offscreen OPFS bridge; silently leave them to the worker.
+  if (message.name === 'is_ready' || message.name === 'download') return;
+
   console.log('[GrabIt Factory] Received from service:', { name: message.name, downloadId: message.data?.download_id });
 
   try {

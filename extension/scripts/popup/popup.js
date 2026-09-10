@@ -407,6 +407,15 @@ function handleWSMessage(msg) {
   }
   if (msg.type === 'download_progress') {
     updateQueueItemProgress(msg.id, msg.progress);
+    if (msg.playlistTotal != null) {
+      const queueItem = state.queue.find(item => item.id === msg.id);
+      if (queueItem) {
+        queueItem.options = queueItem.options || {};
+        queueItem.options.playlistDownloaded = Number(msg.playlistDownloaded) || 0;
+        queueItem.options.playlistTotal = Number(msg.playlistTotal);
+      }
+      updateQueuePlaylistCount(msg.id, msg.playlistDownloaded, msg.playlistTotal);
+    }
   }
   if (msg.type === 'download_complete') {
     toast('Download complete!', 'success');
@@ -1201,7 +1210,12 @@ document.querySelectorAll('[data-pl-action]').forEach(btn => {
       action,
       platform: 'youtube',
       title: probe.title,
-      options
+      options: {
+        ...options,
+        playlistName: probe.title,
+        playlistTotal: Number.isFinite(Number(probe.itemCount)) ? Number(probe.itemCount) : undefined,
+        playlistDownloaded: 0
+      }
     });
   });
 });
@@ -1802,6 +1816,13 @@ function updateQueueItemProgress(id, progress) {
   }
 }
 
+function updateQueuePlaylistCount(id, downloaded, total) {
+  const count = document.querySelector(`[data-qid="${id}"] .qi-playlist-count`);
+  if (count && Number.isFinite(Number(total))) {
+    count.textContent = `${Math.min(Number(downloaded) || 0, Number(total))} / ${Number(total)} videos`;
+  }
+}
+
 function renderQueue() {
   const list = document.getElementById('queue-list');
   if (!list) return;
@@ -1818,10 +1839,19 @@ function renderQueue() {
     const isActive = item.status === 'downloading';
     const isDone = item.status === 'complete';
     const isFailed = item.status === 'failed';
+    const playlistTotal = item.platform === 'youtube' && item.action?.startsWith('download_playlist')
+      ? Number(item.options?.playlistTotal)
+      : 0;
+    const playlistDownloaded = playlistTotal > 0
+      ? Math.min(playlistTotal, Number(item.options?.playlistDownloaded) || 0)
+      : 0;
+    const playlistCount = playlistTotal > 0
+      ? `<span class="qi-playlist-count">${playlistDownloaded} / ${playlistTotal} videos</span>`
+      : '';
 
     return `<div class="queue-item" data-qid="${item.id}">
       <div class="qi-header">
-        <div class="qi-title" title="${item.title || item.url}">${item.title || item.url}</div>
+        <div class="qi-title" title="${item.title || item.url}">${item.title || item.url}${playlistCount}</div>
         <div class="qi-status ${statusClass}">${
           isActive ? `<div class="spinner" style="width:12px;height:12px;border-width:1.5px"></div>` : ''
         } ${item.status}</div>
@@ -1836,9 +1866,9 @@ function renderQueue() {
       ${item.error ? `<div style="font-size:11px;color:var(--red);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${item.error}">${item.error}</div>` : ''}
       <div class="qi-actions">
         ${isFailed || item.status === 'cancelled' ? `<button class="qi-btn success" data-qaction="retry" data-id="${item.id}">${icon('retry', 12)} Retry</button>` : ''}
-        ${isDone && item.file ? `<button class="qi-btn" data-qaction="open-file" data-file="${item.file}">Open File</button>` : ''}
-        ${isDone && item.folder ? `<button class="qi-btn" data-qaction="open-folder" data-folder="${item.folder}">Open Folder</button>` : ''}
-        ${isDone && item.file && !item.folder ? `<button class="qi-btn" data-qaction="open-folder" data-file="${item.file}">Open Folder</button>` : ''}
+        ${isDone && item.file ? `<button class="qi-btn" data-qaction="open-file" data-id="${item.id}" data-file="${item.file}">Open File</button>` : ''}
+        ${isDone && item.folder ? `<button class="qi-btn" data-qaction="open-folder" data-id="${item.id}" data-folder="${item.folder}">Open Folder</button>` : ''}
+        ${isDone && item.file && !item.folder ? `<button class="qi-btn" data-qaction="open-folder" data-id="${item.id}" data-file="${item.file}">Open Folder</button>` : ''}
         ${!isDone && !isFailed && item.status !== 'cancelled' ? `<button class="qi-btn danger" data-qaction="cancel" data-id="${item.id}">${icon('x', 11)} Cancel</button>` : ''}
         ${isDone || isFailed || item.status === 'cancelled' ? `<button class="qi-btn danger" data-qaction="remove" data-id="${item.id}">${icon('x', 11)}</button>` : ''}
       </div>
@@ -1848,19 +1878,33 @@ function renderQueue() {
   // Wire queue actions
   list.querySelectorAll('[data-qaction]').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const action = btn.dataset.qaction;
-      const id = btn.dataset.id;
-      const item = state.queue.find(entry => entry.id === id);
-      if (item?.source === 'stream') {
-        if (action === 'cancel' || action === 'remove') await new Promise(resolve => chrome.runtime.sendMessage({ type: 'OFFLINE_STREAM_QUEUE_ACTION', action, id }, resolve));
-      } else {
-        if (action === 'cancel') { await api('POST', `/queue/${id}/cancel`); }
-        if (action === 'retry') { await api('POST', `/queue/${id}/retry`); }
-        if (action === 'remove') { await api('DELETE', `/queue/${id}`); }
+      try {
+        const action = btn.dataset.qaction;
+        const id = btn.dataset.id;
+        const item = state.queue.find(entry => entry.id === id);
+        if (item?.source === 'stream') {
+          if (action === 'cancel' || action === 'remove' || action === 'retry') {
+            await new Promise(resolve => chrome.runtime.sendMessage({ type: 'OFFLINE_STREAM_QUEUE_ACTION', action, id }, resolve));
+          }
+          if (action === 'open-file' || action === 'open-folder') {
+            if (!item.browserDownloadId) throw new Error('This stream file is no longer available in Chrome downloads.');
+            // `downloads.open()` requires a real user gesture. Calling it in the
+            // popup click handler preserves that gesture; routing it through the
+            // service worker does not on every Chromium build.
+            if (action === 'open-file') await chrome.downloads.open(item.browserDownloadId);
+            else await chrome.downloads.show(item.browserDownloadId);
+          }
+        } else {
+          if (action === 'cancel') { await api('POST', `/queue/${id}/cancel`); }
+          if (action === 'retry') { await api('POST', `/queue/${id}/retry`); }
+          if (action === 'remove') { await api('DELETE', `/queue/${id}`); }
+        }
+        if (item?.source !== 'stream' && action === 'open-file') { await api('POST', '/download/open-file', { filePath: btn.dataset.file }); }
+        if (item?.source !== 'stream' && action === 'open-folder') { await api('POST', '/download/open-folder', { folderPath: btn.dataset.folder, filePath: btn.dataset.file }); }
+        await loadQueue();
+      } catch (error) {
+        toast(`Action failed: ${error?.message || String(error)}`, 'error');
       }
-      if (action === 'open-file') { await api('POST', '/download/open-file', { filePath: btn.dataset.file }); }
-      if (action === 'open-folder') { await api('POST', '/download/open-folder', { folderPath: btn.dataset.folder, filePath: btn.dataset.file }); }
-      loadQueue();
     });
   });
 

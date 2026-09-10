@@ -440,6 +440,21 @@ function spawnProcess(bin, args, downloadId, item, parseLine) {
         return;
       }
 
+      const playlistDoneMatch = trimmed.match(/^__GRABIT_PLAYLIST_DONE__(\d+)$/);
+      if (playlistDoneMatch && item?.options && typeof item.options.playlistTotal === 'number') {
+        item.options.playlistDownloaded = Math.min(
+          item.options.playlistTotal,
+          (item.options.playlistDownloaded || 0) + 1
+        );
+        item.progress = { ...item.progress, percent: 100 };
+        broadcastProgress(downloadId, item.progress, {
+          playlistDownloaded: item.options.playlistDownloaded,
+          playlistTotal: item.options.playlistTotal,
+          playlistName: item.options.playlistName || item.title
+        }, true);
+        return;
+      }
+
       // ─────────────────────────────────────────────
       // Capture download destination
       // ─────────────────────────────────────────────
@@ -1662,6 +1677,12 @@ async function downloadYouTubePlaylist(url, options = {}, downloadId, item) {
   const playlistFolder = audioOnly ? path.join(ytBase, 'Audio', playlistName) : path.join(ytBase, 'Playlists', playlistName);
   const folder = ensureFolder(playlistFolder);
 
+  if (item) {
+    item.options = item.options || {};
+    item.options.playlistName = item.options.playlistName || playlistName;
+    item.options.playlistDownloaded = Number(item.options.playlistDownloaded) || 0;
+  }
+
   const matchFilter = 'availability != "needs_auth" & availability != "unavailable"';
   const h = quality === 'recommended' ? 720 : parseInt(quality) || 720;
 
@@ -1674,7 +1695,8 @@ async function downloadYouTubePlaylist(url, options = {}, downloadId, item) {
       '--convert-thumbnails', 'jpg',
       '--embed-thumbnail', '--add-metadata',
       '--output', path.join(folder, '%(playlist_index)s - %(title)s.%(ext)s'),
-      '--yes-playlist', '--match-filter', matchFilter,
+      '--print', 'after_move:__GRABIT_PLAYLIST_DONE__%(playlist_index)s',
+      '--continue', '--yes-playlist', '--match-filter', matchFilter,
       '--progress', '--newline', '--no-warnings', '--ignore-errors', url
     ];
     args.push(...getCookiesArgs('yt-dlp'));
@@ -1697,7 +1719,8 @@ async function downloadYouTubePlaylist(url, options = {}, downloadId, item) {
       '--embed-thumbnail',
       '--add-metadata',
       '--output', path.join(folder, '%(playlist_index)s - %(title)s [%(id)s].%(ext)s'),
-      '--yes-playlist', '--match-filter', matchFilter,
+      '--print', 'after_move:__GRABIT_PLAYLIST_DONE__%(playlist_index)s',
+      '--continue', '--yes-playlist', '--match-filter', matchFilter,
       '--progress', '--newline', '--no-warnings', '--ignore-errors', url
     ];
     args.push(...getCookiesArgs('yt-dlp'));
@@ -1875,12 +1898,33 @@ function igBase(sub, options, settings) {
   ));
 }
 
+function findInstagramFiles(folder, mediaId) {
+  if (!folder || !mediaId || !fs.existsSync(folder)) return [];
+  try {
+    const escapedId = mediaId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const filePattern = new RegExp(`(?:^|_)${escapedId}(?:_|\\.)`, 'i');
+    return fs.readdirSync(folder)
+      .filter(name => filePattern.test(name))
+      .map(name => path.join(folder, name))
+      .filter(file => fs.statSync(file).isFile());
+  } catch {
+    return [];
+  }
+}
+
+function instagramMediaId(url) {
+  return url.match(/(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)\/?/)?.[1] || null;
+}
+
 async function downloadInstagramReel(url, options = {}, downloadId, item) {
   const settings = getSettings().instagram || {};
   const folder   = igBase('Reels', options, settings);
+  const mediaId = instagramMediaId(url);
+  const existing = findInstagramFiles(folder, mediaId);
+  if (existing.length) return { success: true, file: existing[existing.length - 1], files: existing, folder };
   const args = [
     '--no-playlist',
-    '--output', path.join(folder, '%(uploader)s_%(id)s.%(ext)s'),
+    '--output', path.join(folder, '%(channel)s_%(id)s.%(ext)s'),
     '--progress', '--newline', '--no-warnings', url
   ];
   args.push(...getCookiesArgs('yt-dlp'));
@@ -1890,13 +1934,16 @@ async function downloadInstagramReel(url, options = {}, downloadId, item) {
 async function downloadInstagramReelAudio(url, options = {}, downloadId, item) {
   const settings = getSettings().instagram || {};
   const folder   = igBase('Audio', options, settings);
+  const mediaId = instagramMediaId(url);
+  const existing = findInstagramFiles(folder, mediaId);
+  if (existing.length) return { success: true, file: existing[existing.length - 1], files: existing, folder };
   const format   = options.format || settings.preferredAudioFormat || 'mp3';
   const args = [
     '--extract-audio', '--audio-format', format, '--audio-quality', format === 'mp3' ? '192' : '0',
     '--convert-thumbnails', 'jpg',
     '--embed-thumbnail', '--add-metadata',
     '--no-playlist',
-    '--output', path.join(folder, '%(uploader)s_%(id)s.%(ext)s'),
+    '--output', path.join(folder, '%(channel)s_%(id)s.%(ext)s'),
     '--progress', '--newline', '--no-warnings', url
   ];
   args.push(...getCookiesArgs('yt-dlp'));
@@ -1907,10 +1954,11 @@ async function downloadInstagramPhoto(url, options = {}, downloadId, item) {
   const settings = getSettings().instagram || {};
 
   // Extract Instagram media ID (shortcode) from URL for naming
-  const idMatch = url.match(/(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)\/?/);
-  const mediaId = idMatch ? idMatch[1] : 'unknown';
+  const mediaId = instagramMediaId(url) || 'unknown';
 
   const folder   = igBase('Photos', options, settings);
+  const existing = findInstagramFiles(folder, mediaId);
+  if (existing.length) return { success: true, file: existing[existing.length - 1], files: existing, folder };
 
   // Use simple filename template and rename after download
   const bin = getGalleryDlBin();
@@ -2045,6 +2093,9 @@ async function downloadInstagramSlide(url, slideObj, options = {}, downloadId, i
   // Extract Instagram media ID (shortcode) from URL for naming
   const idMatch = url.match(/(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)\/?/);
   const mediaId = idMatch ? idMatch[1] : 'unknown';
+  const existing = findInstagramFiles(folder, mediaId)
+    .filter(file => new RegExp(`_${String(slideNum).padStart(2, '0')}\\.`).test(file));
+  if (existing.length) return { success: true, file: existing[existing.length - 1], files: existing, folder };
 
   const gdArgs = [
     '--range', `${slideNum}-${slideNum}`,
@@ -2195,6 +2246,8 @@ async function downloadInstagramCarouselAll(url, options = {}, downloadId, item)
   // Extract Instagram media ID (shortcode) from URL for naming
   const idMatch = url.match(/(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)\/?/);
   const mediaId = idMatch ? idMatch[1] : 'unknown';
+  const existing = findInstagramFiles(carouselDir, mediaId);
+  if (existing.length) return { success: true, file: existing[existing.length - 1], files: existing, folder: carouselDir };
 
   const bin = getGalleryDlBin();
   const args = [

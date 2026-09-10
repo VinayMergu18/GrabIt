@@ -73,6 +73,11 @@ const streamStoreReady = chrome.storage.session.get(STREAM_STORE_KEY).then(resul
 }).catch(error => console.debug('[Stream store] restore failed:', error));
 const offlineQueueReady = chrome.storage.session.get(OFFLINE_QUEUE_KEY).then(result => {
   for (const job of result[OFFLINE_QUEUE_KEY] || []) if (job?.id) offlineStreamJobs.set(job.id, job);
+  for (const job of offlineStreamJobs.values()) {
+    if (job.browserDownloadId != null && job.status === 'downloading') {
+      void syncOfflineBrowserDownload(job.id);
+    }
+  }
 }).catch(error => console.debug('[Offline queue] restore failed:', error));
 
 function persistStreamStore() {
@@ -96,6 +101,49 @@ function updateOfflineJob(id, patch) {
   if (!job) return;
   Object.assign(job, patch);
   publishOfflineQueue();
+}
+
+function revokeWorkerBlobUrl(blobUrl) {
+  if (!blobUrl) return;
+  try {
+    vdownChannel.postMessage({
+      channel: 2,
+      msg: { name: 'revoke_blob_url', data: { blob_url: blobUrl } }
+    });
+  } catch (error) {
+    console.warn('[GrabIt] Failed to release stream Blob URL:', error);
+  }
+}
+
+async function syncOfflineBrowserDownload(jobId) {
+  const job = offlineStreamJobs.get(jobId);
+  if (!job?.browserDownloadId || job.status !== 'downloading') return;
+  try {
+    const [download] = await chrome.downloads.search({ id: job.browserDownloadId });
+    if (!download) return;
+    if (download.state === 'complete') {
+      if (!download.filename || download.fileSize === 0) {
+        updateOfflineJob(jobId, { status: 'failed', error: 'Chrome saved an empty stream file.' });
+      } else {
+        updateOfflineJob(jobId, {
+          status: 'complete',
+          file: download.filename,
+          progress: { percent: 100, detail: 'Saved to Streams' }
+        });
+      }
+      revokeWorkerBlobUrl(job.blobUrl);
+      updateOfflineJob(jobId, { blobUrl: null });
+    } else if (download.state === 'interrupted') {
+      updateOfflineJob(jobId, {
+        status: 'failed',
+        error: download.error || 'Download interrupted'
+      });
+      revokeWorkerBlobUrl(job.blobUrl);
+      updateOfflineJob(jobId, { blobUrl: null });
+    }
+  } catch (error) {
+    console.debug('[Stream download] could not reconcile browser state:', error);
+  }
 }
 // Request headers are needed for signed/CDN streams that reject a bare fetch.
 // Populated by the broad onSendHeaders listener below and evicted once the
@@ -749,13 +797,30 @@ chrome.downloads.onChanged.addListener(async delta => {
     patch.receivedBytes = received; patch.totalBytes = total;
     patch.progress = { percent: total > 0 ? Math.round(received * 100 / total) : job.progress?.percent || 100, detail: total > 0 ? `${Math.round(received * 100 / total)}% saved` : 'Saving…' };
   }
-  if (delta.error?.current) { patch.status = 'failed'; patch.error = delta.error.current; }
+  if (delta.error?.current) {
+    patch.status = 'failed';
+    patch.error = delta.error.current;
+  }
   if (delta.state?.current === 'complete') {
     const [item] = await chrome.downloads.search({ id: delta.id });
-    patch.status = 'complete'; patch.progress = { percent: 100, detail: 'Saved to Streams' }; patch.file = item?.filename || '';
+    if (!item?.filename || item.fileSize === 0) {
+      patch.status = 'failed';
+      patch.error = 'Chrome saved an empty stream file.';
+    } else {
+      patch.status = 'complete';
+      patch.progress = { percent: 100, detail: 'Saved to Streams' };
+      patch.file = item.filename;
+    }
   }
-  if (delta.state?.current === 'interrupted') { patch.status = 'failed'; patch.error = delta.error?.current || 'Download interrupted'; }
+  if (delta.state?.current === 'interrupted') {
+    patch.status = 'failed';
+    patch.error = delta.error?.current || 'Download interrupted';
+  }
   updateOfflineJob(job.id, patch);
+  if (delta.state?.current === 'complete' || delta.state?.current === 'interrupted' || delta.error?.current) {
+    revokeWorkerBlobUrl(job.blobUrl);
+    updateOfflineJob(job.id, { blobUrl: null });
+  }
 });
 
 // VDown's browser-only worker is vendored separately so its large generated
@@ -772,12 +837,14 @@ console.log(
   JSON.stringify(event.data, null, 2)
 );
 
-if (
-  event.data?.msg?.name === 'download_error' ||
-  event.data?.msg?.name === 'download_result'
-) {
+if (event.data?.msg?.name === 'download_error') {
   console.error(
-    '[VDown FINAL MESSAGE]',
+    '[VDown DOWNLOAD ERROR]',
+    JSON.stringify(event.data, null, 2)
+  );
+} else if (event.data?.msg?.name === 'download_result') {
+  console.debug(
+    '[VDown DOWNLOAD RESULT]',
     JSON.stringify(event.data, null, 2)
   );
 }
@@ -1303,7 +1370,7 @@ async function getCookiesForUrl(url) {
 //   }
 // }
 
-async function offlineStreamDownload(tabId, streamUrl, variantId) {
+async function offlineStreamDownload(tabId, streamUrl, variantId, jobId = `stream_${crypto.randomUUID()}`) {
   const stream = tabStreams.get(tabId)?.get(streamUrl);
 
   if (!stream) {
@@ -1317,8 +1384,6 @@ async function offlineStreamDownload(tabId, streamUrl, variantId) {
 
   const headers = stream.headers || [];
 
-  const jobId = `stream_${crypto.randomUUID()}`;
-
   const abortController = new AbortController();
 
   offlineAbortControllers.set(jobId, abortController);
@@ -1328,6 +1393,7 @@ async function offlineStreamDownload(tabId, streamUrl, variantId) {
     source: 'stream',
     title: stream.name,
     url: streamUrl,
+    variantId,
     tabId,
     status: 'downloading',
     createdAt: Date.now(),
@@ -1544,6 +1610,10 @@ async function offlineStreamDownload(tabId, streamUrl, variantId) {
           'http_audio_video_one_source_jsfetch',
 
         url: new URL(stream.url),
+        // LibAV selects the output container from this value. Without it the
+        // worker writes to a `.undefined` output name, which can produce a
+        // completed browser download that media players cannot decode.
+        muxer: extension,
         carry_get_params: false,
         extension,
         is_youtube: false,
@@ -1608,12 +1678,16 @@ async function offlineStreamDownload(tabId, streamUrl, variantId) {
 
       updateOfflineJob(jobId, {
         browserDownloadId,
+        blobUrl: workerBlobUrl,
         progress: {
           percent: 100,
           detail:
             'Browser download started'
         }
       });
+      // Covers the small race where a fast browser download completes before
+      // the onChanged listener sees the newly assigned download id.
+      void syncOfflineBrowserDownload(jobId);
 
       notifyStreamProgress(
         tabId,
@@ -1629,31 +1703,10 @@ async function offlineStreamDownload(tabId, streamUrl, variantId) {
         jobId
       };
 
-    } finally {
-      // Keep the Blob URL alive long enough for Chrome
-      // to consume it.
-      setTimeout(() => {
-        if (!workerBlobUrl) {
-          return;
-        }
-
-        try {
-          vdownChannel.postMessage({
-            channel: 2,
-            msg: {
-              name: 'revoke_blob_url',
-              data: {
-                blob_url: workerBlobUrl
-              }
-            }
-          });
-        } catch (error) {
-          console.warn(
-            '[GrabIt] Failed to request Blob URL cleanup:',
-            error
-          );
-        }
-      }, 60_000);
+    } catch (error) {
+      // No browser download owns this URL if starting it failed.
+      revokeWorkerBlobUrl(workerBlobUrl);
+      throw error;
     }
 
   } catch (error) {
@@ -1680,6 +1733,17 @@ async function offlineStreamDownload(tabId, streamUrl, variantId) {
   } finally {
     offlineAbortControllers.delete(jobId);
   }
+}
+
+function startOfflineStreamDownload(tabId, streamUrl, variantId) {
+  const jobId = `stream_${crypto.randomUUID()}`;
+  // Intentionally do not await this work from the popup message handler. The
+  // worker can remux a long stream for minutes; the queue is the authoritative
+  // source for progress and its eventual success or failure.
+  void offlineStreamDownload(tabId, streamUrl, variantId, jobId).catch(error => {
+    console.error('[GrabIt] Background stream download failed:', error);
+  });
+  return jobId;
 }
 
 
@@ -1740,6 +1804,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           if (job.browserDownloadId != null) await chrome.downloads.cancel(job.browserDownloadId);
           else updateOfflineJob(job.id, { status: 'cancelled', progress: { percent: 0, detail: 'Cancelled' } });
         }
+        if (msg.action === 'retry' && job) {
+          if (!['failed', 'cancelled'].includes(job.status)) throw new Error('Only failed or cancelled stream downloads can be retried.');
+          const retryJobId = startOfflineStreamDownload(job.tabId, job.url, job.variantId || '');
+          sendResponse({ ok: true, jobId: retryJobId });
+          return;
+        }
         if (msg.action === 'remove' && job) { offlineStreamJobs.delete(job.id); publishOfflineQueue(); }
         if (msg.action === 'clear-completed') {
           for (const [id, item] of offlineStreamJobs) if (item.status === 'complete' || item.status === 'failed') offlineStreamJobs.delete(id);
@@ -1754,8 +1824,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'DOWNLOAD_STREAM_OFFLINE') {
     chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
       try {
-        const result = await offlineStreamDownload(tabs[0]?.id, msg.streamUrl, msg.variantId);
-        sendResponse({ ok: true, ...result });
+        await streamStoreReady;
+        const tabId = tabs[0]?.id;
+        if (!getStreamByUrl(tabId, msg.streamUrl)) {
+          throw new Error('The selected stream is no longer available. Refresh the page and try again.');
+        }
+        const jobId = startOfflineStreamDownload(tabId, msg.streamUrl, msg.variantId);
+        sendResponse({ ok: true, jobId });
       } catch (error) { sendResponse({ ok: false, error: error.message || String(error) }); }
     });
     return true;
