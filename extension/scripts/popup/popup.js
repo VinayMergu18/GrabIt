@@ -455,6 +455,17 @@ savePlaylistProgress(state.currentTabId, msg.playlistId, {
   }
   if (msg.type === 'stream_download_progress' && state.activeTab === 'streams') {
     const p = msg.progress || {};
+    const cards = [...document.querySelectorAll('.stream-card')];
+    const card = cards.find(item => item.dataset.streamUrl === msg.streamUrl);
+    const bar = card?.querySelector('.stream-progress-bar');
+    if (bar) {
+      const percent = p.percent?.is_known ? Math.round(p.percent.value) :
+        (p.total ? Math.round((Number(p.completed || 0) * 100) / Number(p.total)) : null);
+      bar.style.display = 'block';
+      if (Number.isFinite(percent)) bar.querySelector('.stream-progress-fill').style.width = `${Math.max(0, Math.min(100, percent))}%`;
+      const label = bar.querySelector('.stream-progress-text');
+      if (label) label.textContent = p.total ? `${p.completed || 0}/${p.total} segments` : (p.phase || 'Downloading…');
+    }
     if (p.phase === 'downloading' && p.total) toast(`Downloading segment ${p.completed}/${p.total}`);
     if (p.phase === 'complete') toast('Browser download started', 'success');
   }
@@ -1437,14 +1448,15 @@ function streamCard(stream, index) {
   // VDown permits another hover to retry a transient worker/network failure.
   const needsPreview = !stream.previewFile;
   const previewHtml = `<video class="stream-preview" muted loop playsinline preload="metadata" ${preview ? `src="${escHtml(preview)}"` : ''} ${poster ? `poster="${escHtml(poster)}"` : ''} data-preview-file="${escHtml(stream.previewFile || '')}" data-needs-preview="${needsPreview ? 'true' : 'false'}" data-stream-url="${escHtml(stream.url)}"></video>`;
-  const selectedLabel = waitingForVariants ? 'Reading qualities…' : streamQualityShort(variants[0], stream);
+  const selectedVariant = variants.find(variant => variant.id === stream.recommendedVariantId) || variants[0];
+  const selectedLabel = waitingForVariants ? 'Reading qualities…' : streamQualityShort(selectedVariant, stream);
   const options = waitingForVariants ? '' : variants.map((variant, optionIndex) => {
     const shortLabel = streamQualityShort(variant, stream);
-    return `<button type="button" class="stream-quality-option ${optionIndex === 0 ? 'active' : ''}" data-variant-id="${escHtml(variant.id)}" data-short-label="${escHtml(shortLabel)}">${escHtml(streamQualityOption(variant, stream))}</button>`;
+    return `<button type="button" class="stream-quality-option ${variant.id === selectedVariant.id ? 'active' : ''}" data-variant-id="${escHtml(variant.id)}" data-short-label="${escHtml(shortLabel)}">${escHtml(streamQualityOption(variant, stream))}</button>`;
   }).join('');
   const rows = `<div class="stream-variant">
       <div class="stream-quality-wrap">
-        <button type="button" class="stream-quality-picker" data-stream-index="${index}" data-variant-id="${escHtml(variants[0].id)}" aria-label="Available qualities" ${waitingForVariants ? 'disabled' : ''}>${escHtml(selectedLabel)}</button>
+        <button type="button" class="stream-quality-picker" data-stream-index="${index}" data-variant-id="${escHtml(selectedVariant.id)}" aria-label="Available qualities" ${waitingForVariants ? 'disabled' : ''}>${escHtml(selectedLabel)}</button>
         <div class="stream-quality-menu">${options}</div>
       </div>
       <div style="display:flex;gap:5px">

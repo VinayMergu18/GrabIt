@@ -52,6 +52,7 @@ console.log('[sw.js] Script starting');
 const tabStreams = new Map();
 const offlineStreamJobs = new Map();
 const offlineAbortControllers = new Map();
+const DEFAULT_PREFERRED_QUALITY = 1080;
 const OFFLINE_QUEUE_KEY = 'grabit_offline_stream_queue_v1';
 const STREAM_STORE_KEY = 'grabit_streams_by_tab_v1';
 let persistStreamsTimer = null;
@@ -65,6 +66,9 @@ const streamStoreReady = chrome.storage.session.get(STREAM_STORE_KEY).then(resul
     for (const stream of savedStreams) {
       if (!stream?.url || current.has(stream.url)) continue;
       delete stream.previewUrl; delete stream.previewPending; delete stream.previewFailed;
+      if (!stream.recommendedVariantId && Array.isArray(stream.variants)) {
+        stream.recommendedVariantId = recommendedVariantId(stream.variants, stream.preferredEntry);
+      }
       current.set(stream.url, stream);
     }
     tabStreams.set(id, current);
@@ -135,8 +139,9 @@ async function syncOfflineBrowserDownload(jobId) {
       updateOfflineJob(jobId, { blobUrl: null });
     } else if (download.state === 'interrupted') {
       updateOfflineJob(jobId, {
-        status: 'failed',
-        error: download.error || 'Download interrupted'
+        status: job.cancelRequested ? 'cancelled' : 'failed',
+        error: job.cancelRequested ? null : (download.error || 'Download interrupted'),
+        progress: job.cancelRequested ? { percent: 0, detail: 'Cancelled' } : job.progress
       });
       revokeWorkerBlobUrl(job.blobUrl);
       updateOfflineJob(jobId, { blobUrl: null });
@@ -253,7 +258,7 @@ function safeUrlObject(urlString) {
 }
 
 /** Normalize a URL string for equivalence comparison: ignore query, fragment, username, password, and trailing slash. */
-function normalizeUrl(equivUrl) {
+function normalizeUrl(equivUrl, includeQuery = true) {
   try {
     const u = new URL(equivUrl);
     // Remove trailing slash from pathname if present (except for root?)
@@ -261,18 +266,19 @@ function normalizeUrl(equivUrl) {
     if (pathname.length > 1 && pathname.endsWith('/')) {
       pathname = pathname.slice(0, -1);
     }
-    // Return origin + pathname
-    return u.origin + pathname;
+    // A signed query string is part of the resource identity. Dropping it
+    // merges distinct renditions and makes protected streams non-downloadable.
+    return u.origin + pathname + (includeQuery ? u.search : '');
   } catch {
     // If URL invalid, fall back to lowercased string without query/fragment?
     // For simplicity, return the original string lowercased and strip everything after '?'
-    const clean = equivUrl.split('?')[0].split('#')[0].toLowerCase();
+    const clean = (includeQuery ? equivUrl.split('#')[0] : equivUrl.split('?')[0].split('#')[0]).toLowerCase();
     return clean;
   }
 }
 
-function urlsEquivalent(url1, url2) {
-  return normalizeUrl(url1) === normalizeUrl(url2);
+function urlsEquivalent(url1, url2, includeQuery = true) {
+  return normalizeUrl(url1, includeQuery) === normalizeUrl(url2, includeQuery);
 }
 
 function findEquivalentStream(streamMap, url) {
@@ -300,6 +306,7 @@ function addStream(tabId, url, pageTitle, headers = []) {
 
   // Look for an existing stream with an equivalent URL (ignoring query, fragment, etc.)
   const existingStream = findEquivalentStream(map, url);
+  const isNew = !existingStream;
   let streamToUpdate;
 
   if (existingStream) {
@@ -342,7 +349,7 @@ function addStream(tabId, url, pageTitle, headers = []) {
 
   // Update badge and persist if this is a genuinely new stream (by URL)
   // We check if the exact URL was already in the map to avoid excessive updates
-  if (!map.has(url)) {
+  if (isNew) {
     updateBadge(tabId, map.size);
     persistStreamStore();
     // Push to popup if open
@@ -383,6 +390,20 @@ function optionValue(value) { return value?.__serde_tag ? vdownDeserialize(value
 
 function hasResolvedQuality(stream) {
   return Array.isArray(stream?.variants) && stream.variants.some(variant => Number(variant.height) > 0);
+}
+
+function recommendedVariantId(variants, preferredEntry = null) {
+  if (!Array.isArray(variants) || !variants.length) return '';
+  const detectorChoice = variants.find(variant => variant.workerEntry === preferredEntry);
+  if (detectorChoice) return detectorChoice.id;
+  const preferred = variants.find(variant => Number(variant.height) === DEFAULT_PREFERRED_QUALITY);
+  return (preferred || variants[0]).id;
+}
+
+function streamRank(stream) {
+  const source = stream.source === 'detector' ? 0 : stream.type === 'HLS' || stream.type === 'DASH' ? 1 : 2;
+  const best = Math.max(0, ...(stream.variants || []).map(variant => Number(variant.height) || 0));
+  return [source, -best, -(Number(stream.ts) || 0)];
 }
 
 function mergeInferiorStreamDuplicates(map, preferred) {
@@ -463,6 +484,8 @@ function addDetectorMedia(tabId, rawMedia, pageTitle) {
     if (!urlsEquivalent(key, url) && (childUrls.some(childUrl => urlsEquivalent(childUrl, candidate.url)) || isSamePlaylist)) map.delete(key);
   }
   const existing = map.get(url);
+  const rawPreferredEntry = optionValue(media.prefered_entry);
+  const preferredEntry = Number(rawPreferredEntry);
   map.set(url, {
     url, type: media.type === 'mpd_playlist' ? 'DASH' : 'HLS', name: optionValue(media.title) || pageTitle || urlName(url),
     quality: null, headers: normalizeHeaders(optionValue(media.sent_headers)), variants, parsing: false, ts: Date.now(),
@@ -471,6 +494,8 @@ function addDetectorMedia(tabId, rawMedia, pageTitle) {
     thumbnailUrl: optionValue(media.thumbnail_url) || existing?.thumbnailUrl || null,
     previewFile: existing?.previewFile || null, previewUrl: null,
     source: 'detector',
+    preferredEntry: rawPreferredEntry == null || !Number.isFinite(preferredEntry) ? null : preferredEntry,
+    recommendedVariantId: recommendedVariantId(variants, preferredEntry),
     manifestError: variants.length ? null : 'The site exposed no downloadable variants.'
   });
   mergeInferiorStreamDuplicates(map, map.get(url));
@@ -548,6 +573,7 @@ async function enrichManifest(tabId, stream) {
     // A media playlist is a valid single-quality HLS source.
     stream.variants = variants.length ? variants.sort((a, b) => b.height - a.height || b.bitrate - a.bitrate) :
       stream.type === 'HLS' ? [{ id: 'hls-source', protocol: 'hls', url: stream.url, width: 0, height: 0, bitrate: 0, codecs: '', container: 'mp4' }] : [];
+    stream.recommendedVariantId = recommendedVariantId(stream.variants, stream.preferredEntry);
     if (variants.length) {
       const childUrls = new Set(variants.flatMap(variant => [variant.url, variant.audioUrl]).filter(Boolean));
       const map = tabStreams.get(tabId);
@@ -679,7 +705,7 @@ chrome.webRequest.onHeadersReceived.addListener((details) => {
       }
     } else {
       // No equivalent stream found, create a new one
-      stream = { url: details.url, type, name: tab?.title || urlName(details.url), quality: null,
+      stream = { url: details.url, type, name: urlName(details.url), quality: null,
         headers: normalizeHeaders(requestHeaders.get(details.requestId)), variants: null, parsing: false, ts: Date.now() };
       // Add to map using the original URL as key
       map.set(details.url, stream);
@@ -708,6 +734,16 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   tabStreams.delete(tabId);
   persistStreamStore();
 });
+
+// A tab id can survive SPA or normal navigation. Never show/download media
+// discovered on the previous document.
+chrome.webNavigation.onCommitted.addListener(({ tabId, frameId, transitionType }) => {
+  if (frameId !== 0 || transitionType === 'auto_subframe') return;
+  tabStreams.delete(tabId);
+  updateBadge(tabId, 0);
+  persistStreamStore();
+  chrome.runtime.sendMessage({ type: 'streams_updated', tabId }).catch(() => {});
+}, { url: [{ schemes: ['http', 'https'] }] });
 
 // Tab lifecycle is no longer needed for cookie extraction
 
@@ -852,6 +888,14 @@ if (event.data?.msg?.name === 'download_error') {
 // -------------------------------------------------------
 
   const message = event.data.msg;
+  if (message?.name === 'worker_host_error') {
+    vdownWorkerReady = null;
+    for (const [downloadId, waiter] of vdownWaiters) {
+      vdownWaiters.delete(downloadId);
+      waiter.reject(new Error(message.data?.error || 'The stream worker stopped unexpectedly. Retry the download.'));
+    }
+    return;
+  }
   if (message?.name === 'blob_url_from_file') {
     const waiter = opfsBlobWaiters.get(message.data?.request_id);
     if (!waiter) return;
@@ -863,7 +907,8 @@ if (event.data?.msg?.name === 'download_error') {
   if (message?.name === 'download_progress' && id) {
     const waiter = vdownWaiters.get(id);
     waiter?.onProgress?.(message.data.progress);
-    notifyStreamProgress(null, id, message.data.progress);
+    const job = [...offlineStreamJobs.values()].find(item => item.workerDownloadId === id);
+    if (job) notifyStreamProgress(job.tabId, job.url, message.data.progress);
   }
 //   if ((message?.name === 'download_result' || message?.name === 'download_error') && id) {
 //     const waiter = vdownWaiters.get(id);
@@ -1371,7 +1416,7 @@ async function getCookiesForUrl(url) {
 // }
 
 async function offlineStreamDownload(tabId, streamUrl, variantId, jobId = `stream_${crypto.randomUUID()}`) {
-  const stream = tabStreams.get(tabId)?.get(streamUrl);
+  const stream = getStreamByUrl(tabId, streamUrl);
 
   if (!stream) {
     throw new Error(
@@ -1417,6 +1462,7 @@ async function offlineStreamDownload(tabId, streamUrl, variantId, jobId = `strea
             : undefined
         );
 
+    if (abortController.signal.aborted) return;
     updateOfflineJob(jobId, {
       progress: {
         percent: Number.isFinite(percent) ? percent : 0,
@@ -1770,10 +1816,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const tabId = tabs[0]?.id;
       if (tabId) await scanDomOfTab(tabId); // run DOM scan on every popup open
       const streams = tabId ? [...(tabStreams.get(tabId)?.values() || [])] : [];
-      // Sort: manifests first, then by time detected
+      // Prefer parsed detector media, then verified adaptive media, then
+      // direct heuristics; within each group prefer the best usable quality.
       streams.sort((a, b) => {
-        const order = { HLS: 0, DASH: 1, MP4: 2, WebM: 3, MKV: 4, MOV: 5, FLV: 6, TS: 7 };
-        return (order[a.type] ?? 9) - (order[b.type] ?? 9) || a.ts - b.ts;
+        const left = streamRank(a), right = streamRank(b);
+        return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
       });
       sendResponse({ streams, tabId });
     });
@@ -1799,6 +1846,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (async () => {
       try {
         if (msg.action === 'cancel' && job) {
+          updateOfflineJob(job.id, { cancelRequested: true, progress: { percent: 0, detail: 'Cancelling…' } });
           offlineAbortControllers.get(job.id)?.abort();
           if (job.workerDownloadId) vdownChannel.postMessage({ channel: 2, msg: { name: 'abort_download', data: { download_id: job.workerDownloadId } } });
           if (job.browserDownloadId != null) await chrome.downloads.cancel(job.browserDownloadId);

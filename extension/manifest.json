@@ -9,6 +9,7 @@
     "notifications",
     "tabs",
     "webRequest",
+    "webNavigation",
     "scripting",
     "cookies",
     "downloads",
@@ -131,6 +132,69 @@
         "*://*.chaturbate.eu/*",
         "*://*.chaturbate.global/*"
       ],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": ["scripts/content/detectors/canva.js"],
+      "matches": ["*://*.canva.com/*"],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": ["scripts/content/detectors/iq.js"],
+      "matches": ["*://*.iq.com/*"],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": ["scripts/content/detectors/iq_untrusted.js"],
+      "matches": ["*://*.iq.com/*"],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "all_frames": true,
+      "js": ["scripts/content/detectors/twitcasting.js"],
+      "matches": ["*://*.twitcasting.tv/*"],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": ["scripts/content/detectors/bilibili.js"],
+      "matches": ["*://*.bilibili.tv/*", "*://*.bilibili.com/*"],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": ["scripts/content/detectors/bilibili_untrusted.js"],
+      "matches": ["*://*.bilibili.tv/*", "*://*.bilibili.com/*"],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "all_frames": true,
+      "js": ["scripts/content/detectors/taiav.js"],
+      "matches": ["*://*.taiav.com/*"],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "all_frames": true,
+      "js": ["scripts/content/detectors/osmosis.js"],
+      "matches": ["*://*.osmosis.org/*"],
+      "run_at": "document_end",
+      "world": "ISOLATED"
+    },
+    {
+      "all_frames": true,
+      "js": ["scripts/content/detectors/kick.js"],
+      "matches": ["*://*.kick.com/*"],
       "run_at": "document_end",
       "world": "ISOLATED"
     }
