@@ -125,6 +125,14 @@ GrabIt/
 ### Build Steps
 No build step is required for basic development—just edit files under `extension/` and reload the extension in the browser.
 
+The checked-in QuickJS bundle is used to safely decode YouTube player signatures. To rebuild it after changing the QuickJS dependency:
+
+```bash
+cd extension
+npm ci
+npm run build:qjs
+```
+
 #### Linting / Formatting (optional)
 The project follows a 2‑space indentation style with semicolons. You can enforce it with:
 

@@ -20,7 +20,8 @@
     "*://*/*"
   ],
   "background": {
-    "service_worker": "scripts/background/sw.js"
+    "service_worker": "scripts/background/sw.js",
+    "type": "module"
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'"
@@ -39,6 +40,28 @@
       ],
       "run_at": "document_idle",
       "all_frames": false
+    },
+    {
+      "matches": [
+        "*://*.youtube.com/*"
+      ],
+      "js": [
+        "scripts/content/detectors/youtube_vdown.js"
+      ],
+      "run_at": "document_end",
+      "all_frames": true,
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "*://*.youtube.com/*"
+      ],
+      "js": [
+        "scripts/content/detectors/youtube_vdown_untrusted.js"
+      ],
+      "run_at": "document_end",
+      "all_frames": true,
+      "world": "MAIN"
     },
     {
       "matches": [

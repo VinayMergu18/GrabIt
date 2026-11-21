@@ -1,3 +1,5 @@
+import { getQuickJS } from './qjs.bundle.js';
+
 /**
  * sw.js — Background service worker with web stream detection.
  *
@@ -423,10 +425,13 @@ function mergeInferiorStreamDuplicates(map, preferred) {
   }
 }
 
-function addDetectorMedia(tabId, rawMedia, pageTitle) {
+function addDetectorMedia(tabId, rawMedia, pageTitle, pageUrl) {
   const media = vdownDeserialize(rawMedia);
-  if (!media || !['m3u8_playlist', 'mpd_playlist'].includes(media.type) || !media.master_url) return false;
-  const url = optionValue(media.master_url);
+  const isYouTube = media?.type === 'youtube_format';
+  if (!media || (!isYouTube && !['m3u8_playlist', 'mpd_playlist'].includes(media.type))) return false;
+  const url = isYouTube
+    ? pageUrl || optionValue(media.initiator)
+    : optionValue(media.master_url);
   if (!url) return false;
   if (!tabStreams.has(tabId)) tabStreams.set(tabId, new Map());
   const map = tabStreams.get(tabId);
@@ -444,11 +449,20 @@ function addDetectorMedia(tabId, rawMedia, pageTitle) {
     const resolution = attributes.RESOLUTION || attributes.resolution || {};
     const width = Number(size.width || resolution.width || 0);
     const height = Number(size.height || resolution.height || 0);
-    const videoUrl = optionValue(av.video) || optionValue(entry.url) || optionValue(entry.uri) || url;
-    const audioUrl = optionValue(av.audio) || null;
+    const video = optionValue(av.video);
+    const audio = optionValue(av.audio);
+    const videoUrl = isYouTube
+      ? (video && typeof video === 'object' ? optionValue(video.url) : null)
+      : video || optionValue(entry.url) || optionValue(entry.uri) || url;
+    const audioUrl = isYouTube
+      ? (audio && typeof audio === 'object' ? optionValue(audio.url) : null)
+      : audio || null;
+    if (isYouTube && !videoUrl && !audioUrl) return null;
+    const contentLength = Number(optionValue(video?.content_length) || 0);
+    const audioContentLength = Number(optionValue(audio?.content_length) || 0);
     let resolvedVideoUrl = videoUrl, resolvedAudioUrl = audioUrl;
     try {
-      resolvedVideoUrl = new URL(String(videoUrl), safeUrlObject(url)).href;
+      if (videoUrl) resolvedVideoUrl = new URL(String(videoUrl), safeUrlObject(url)).href;
     } catch (err) {
       console.warn('[GrabIt] Failed to resolve video URL:', err.message, {
         videoUrl,
@@ -466,29 +480,37 @@ function addDetectorMedia(tabId, rawMedia, pageTitle) {
       // Fallback to original string
     }
     return {
-      id: `${media.type}-${index}`, protocol: media.type === 'mpd_playlist' ? 'dash' : 'hls',
-      workerEntry: Number.isFinite(entry.index) ? entry.index : index,
-      url: resolvedVideoUrl, audioUrl: resolvedAudioUrl,
+      id: `${media.type}-${index}`, protocol: isYouTube ? 'youtube' : media.type === 'mpd_playlist' ? 'dash' : 'hls',
+      workerEntry: isYouTube ? index : (Number.isFinite(entry.index) ? entry.index : index),
+      url: resolvedVideoUrl || resolvedAudioUrl,
+      audioUrl: resolvedAudioUrl,
+      audioOnly: isYouTube && !resolvedVideoUrl,
+      contentLength,
+      audioContentLength,
+      size: contentLength + audioContentLength || null,
       width, height, bitrate: Number(optionValue(quality.bitrate) || attributes.BANDWIDTH || attributes.bandwidth || 0),
       codecs: '', container: optionValue(entry.demuxer) || 'mp4'
     };
-  }).sort((a, b) => b.height - a.height || b.bitrate - a.bitrate);
+  }).filter(Boolean).sort((a, b) => b.height - a.height || b.bitrate - a.bitrate);
   // VDown's deduplication rule: once a master playlist is known, discard the
   // child rendition entries discovered from the network. They are not separate
   // videos and were the source of GrabIt's duplicate cards.
   const childUrls = variants.flatMap(variant => [variant.url, variant.audioUrl]).filter(Boolean);
   for (const [key, candidate] of map) {
     const candidateVariants = candidate.variants || [];
-    const isSamePlaylist = candidate.type === (media.type === 'mpd_playlist' ? 'DASH' : 'HLS') &&
+    const isSamePlaylist = candidate.type === (isYouTube ? 'YouTube' : media.type === 'mpd_playlist' ? 'DASH' : 'HLS') &&
       candidateVariants.some(variant => childUrls.some(childUrl => urlsEquivalent(childUrl, variant.url)));
     if (!urlsEquivalent(key, url) && (childUrls.some(childUrl => urlsEquivalent(childUrl, candidate.url)) || isSamePlaylist)) map.delete(key);
   }
   const existing = map.get(url);
   const rawPreferredEntry = optionValue(media.prefered_entry);
   const preferredEntry = Number(rawPreferredEntry);
+  const streamType = isYouTube ? 'YouTube' : media.type === 'mpd_playlist' ? 'DASH' : 'HLS';
   map.set(url, {
-    url, type: media.type === 'mpd_playlist' ? 'DASH' : 'HLS', name: optionValue(media.title) || pageTitle || urlName(url),
+    url, type: streamType, name: optionValue(media.title) || pageTitle || urlName(url),
+    duration: optionValue(media.duration) || 'unknown',
     quality: null, headers: normalizeHeaders(optionValue(media.sent_headers)), variants, parsing: false, ts: Date.now(),
+    isYoutube: Boolean(optionValue(media.is_youtube)),
     // A detector does not always provide artwork. Preserve the page poster and
     // an already generated VDown preview when it re-announces this media.
     thumbnailUrl: optionValue(media.thumbnail_url) || existing?.thumbnailUrl || null,
@@ -608,6 +630,70 @@ function updateBadge(tabId, count) {
   if (count > 0) chrome.action.setBadgeBackgroundColor({ color: '#7c3aed', tabId }).catch(() => {});
 }
 
+async function evaluateVdownQjs(data, sender) {
+  const uid = typeof data?.uid === 'string' ? data.uid : '';
+  const reply = async (result) => {
+    if (!uid || sender.tab?.id == null || !Number.isInteger(sender.frameId)) return;
+    let payload;
+    try { payload = JSON.stringify({ ...result, uid }); }
+    catch { payload = JSON.stringify({ error: 'YouTube player result is not JSON serializable', uid }); }
+    await chrome.tabs.sendMessage(sender.tab.id, {
+      channel: 7,
+      msg: { name: 'qjs_result', data: payload }
+    }, { frameId: sender.frameId });
+  };
+  const host = (() => {
+    try { return new URL(sender.url).hostname.toLowerCase(); }
+    catch { return ''; }
+  })();
+  if (sender.id !== chrome.runtime.id || !host.endsWith('youtube.com') ||
+      (host !== 'youtube.com' && !host.endsWith('.youtube.com'))) {
+    return;
+  }
+  if (!uid || uid.length > 128 || typeof data?.code !== 'string' || data.code.length > 1_000_000) {
+    await reply({ error: 'Invalid YouTube player script request' });
+    return;
+  }
+
+  let runtime;
+  let context;
+  try {
+    const QuickJS = await getQuickJS();
+    const deadline = Date.now() + 5000;
+    runtime = QuickJS.newRuntime({
+      memoryLimitBytes: 32 * 1024 * 1024,
+      maxStackSizeBytes: 512 * 1024,
+      interruptHandler: () => Date.now() > deadline
+    });
+    context = runtime.newContext();
+    const result = context.evalCode(data.code);
+    if (result.error) {
+      const error = context.dump(result.error);
+      result.error.dispose();
+      await reply({ error: `${error.name || 'Error'}: ${error.message || String(error)}` });
+      return;
+    }
+
+    const value = context.dump(result.value);
+    result.value.dispose();
+    await reply({ success: value });
+  } catch (error) {
+    await reply({ error: error?.message || String(error) });
+  } finally {
+    context?.dispose();
+    runtime?.dispose();
+  }
+}
+
+
+function isYouTubePlaybackChunk(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname.endsWith('.googlevideo.com') && parsed.pathname === '/videoplayback';
+  } catch {
+    return false;
+  }
+}
 
 // ── webRequest listeners — network-level stream detection ─────────────────────
 const STREAM_URL_PATTERNS = [
@@ -679,7 +765,7 @@ chrome.webRequest.onErrorOccurred.addListener(cleanupRequestHeaders, { urls: ['<
 // Many CDNs hide the extension in a signed URL. Content-Type lets those streams
 // enter the same manifest pipeline as ordinary .m3u8/.mpd URLs.
 chrome.webRequest.onHeadersReceived.addListener((details) => {
-  if (details.tabId < 0) return;
+  if (details.tabId < 0 || isYouTubePlaybackChunk(details.url)) return;
   const contentType = (details.responseHeaders || []).find(h => h.name?.toLowerCase() === 'content-type')?.value?.toLowerCase() || '';
   let type = null;
   if (/mpegurl|vnd\.apple\.mpegurl/.test(contentType)) type = 'HLS';
@@ -744,6 +830,22 @@ chrome.webNavigation.onCommitted.addListener(({ tabId, frameId, transitionType }
   persistStreamStore();
   chrome.runtime.sendMessage({ type: 'streams_updated', tabId }).catch(() => {});
 }, { url: [{ schemes: ['http', 'https'] }] });
+
+// YouTube changes videos with history-state navigation without committing a
+// new document. Discard its old decoded formats before the detector announces
+// media for the new route.
+chrome.webNavigation.onHistoryStateUpdated.addListener(({ tabId, frameId }) => {
+  if (frameId !== 0) return;
+  const streams = tabStreams.get(tabId);
+  if (!streams) return;
+  for (const [url, stream] of streams) {
+    if (stream.type === 'YouTube') streams.delete(url);
+  }
+  if (streams.size === 0) tabStreams.delete(tabId);
+  updateBadge(tabId, streams.size);
+  persistStreamStore();
+  chrome.runtime.sendMessage({ type: 'streams_updated', tabId }).catch(() => {});
+}, { url: [{ hostSuffix: 'youtube.com', schemes: ['https'] }] });
 
 // Tab lifecycle is no longer needed for cookie extraction
 
@@ -830,8 +932,28 @@ chrome.downloads.onChanged.addListener(async delta => {
   if (delta.bytesReceived?.current != null || delta.totalBytes?.current != null) {
     const received = delta.bytesReceived?.current ?? job.receivedBytes ?? 0;
     const total = delta.totalBytes?.current ?? job.totalBytes ?? 0;
+    const elapsedSeconds = Math.max(1, (Date.now() - (job.createdAt || Date.now())) / 1000);
+    const speedBps = received > 0 ? received / elapsedSeconds : 0;
+    const etaSeconds = speedBps > 0 && total > received ? Math.ceil((total - received) / speedBps) : null;
+    const formatBytes = bytes => bytes >= 1024 * 1024
+      ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+      : bytes >= 1024
+        ? `${(bytes / 1024).toFixed(1)} KB`
+        : `${bytes} B`;
+    const formatEta = seconds => seconds >= 3600
+      ? `${Math.ceil(seconds / 3600)}h`
+      : seconds >= 60
+        ? `${Math.ceil(seconds / 60)}m`
+        : `${seconds}s`;
     patch.receivedBytes = received; patch.totalBytes = total;
-    patch.progress = { percent: total > 0 ? Math.round(received * 100 / total) : job.progress?.percent || 100, detail: total > 0 ? `${Math.round(received * 100 / total)}% saved` : 'Saving…' };
+    patch.progress = {
+      percent: total > 0 ? Math.round(received * 100 / total) : job.progress?.percent || 100,
+      detail: speedBps > 0
+        ? `${formatBytes(speedBps)}/s${etaSeconds != null ? ` · ETA ${formatEta(etaSeconds)}` : ''}`
+        : 'Saving…',
+      speed: speedBps > 0 ? `${formatBytes(speedBps)}/s` : null,
+      eta: etaSeconds != null ? formatEta(etaSeconds) : null
+    };
   }
   if (delta.error?.current) {
     patch.status = 'failed';
@@ -849,8 +971,14 @@ chrome.downloads.onChanged.addListener(async delta => {
     }
   }
   if (delta.state?.current === 'interrupted') {
-    patch.status = 'failed';
-    patch.error = delta.error?.current || 'Download interrupted';
+    if (job.cancelRequested) {
+      patch.status = 'cancelled';
+      patch.error = null;
+      patch.progress = { percent: 0, detail: 'Cancelled' };
+    } else {
+      patch.status = 'failed';
+      patch.error = delta.error?.current || 'Download interrupted';
+    }
   }
   updateOfflineJob(job.id, patch);
   if (delta.state?.current === 'complete' || delta.state?.current === 'interrupted' || delta.error?.current) {
@@ -1060,7 +1188,23 @@ async function ensureVdownWorker() {
 async function vdownDownloadNow(args, onProgress) {
   await ensureVdownWorker();
   return new Promise((resolve, reject) => {
-    vdownWaiters.set(args.download_id, { resolve, reject, onProgress });
+    const timeout = setTimeout(() => {
+      const waiter = vdownWaiters.get(args.download_id);
+      if (!waiter) return;
+      vdownWaiters.delete(args.download_id);
+      try {
+        vdownChannel.postMessage({
+          channel: 2,
+          msg: { name: 'abort_download', data: { download_id: args.download_id } }
+        });
+      } catch {}
+      reject(new Error('The stream worker timed out. The source may be unavailable or protected.'));
+    }, 24 * 60 * 60 * 1000);
+    vdownWaiters.set(args.download_id, {
+      resolve: value => { clearTimeout(timeout); resolve(value); },
+      reject: error => { clearTimeout(timeout); reject(error); },
+      onProgress
+    });
     vdownChannel.postMessage({ channel: 2, msg: { name: 'download', data: { download_args: vdownSerialize(args) } } });
   });
 }
@@ -1263,6 +1407,7 @@ async function prepareStreamPreview(tabId, streamUrl, force = false) {
   const variants = stream.variants || [];
   const variant = variants.find(item => item.height === 480) || variants.find(item => item.height === 260) || variants[variants.length - 1];
   if ((stream.type === 'HLS' || stream.type === 'DASH') && !variant?.url) return null;
+  if (stream.type === 'YouTube' && (!variant?.url || variant.audioOnly)) return null;
   stream.previewFailed = false;
   stream.previewPending = true;
   try {
@@ -1274,6 +1419,18 @@ async function prepareStreamPreview(tabId, streamUrl, force = false) {
       args = { ...common, will_use_jsfetch: false, strategy: 'm3u8_video_preview', url: new URL(variant.url) };
     } else if (stream.type === 'DASH') {
       args = { ...common, will_use_jsfetch: true, strategy: 'mpd_video_preview', url: safeUrlObject(stream.url), entry: variant.workerEntry, duration: 'unknown' };
+    } else if (stream.type === 'YouTube') {
+      const container = ['mp4', 'webm', 'mkv'].includes(variant.container) ? variant.container : 'mp4';
+      args = {
+        ...common,
+        is_youtube: true,
+        will_use_jsfetch: false,
+        muxer: container,
+        extension: container,
+        strategy: 'youtube_video_preview',
+        url: safeUrlObject(variant.url),
+        ...(variant.contentLength > 0 ? { content_length: variant.contentLength } : {})
+      };
     } else {
       // This is VDown's http_playlist preview route. Do not point a popup
       // <video> at a cross-origin source: create a short local OPFS preview
@@ -1461,6 +1618,29 @@ async function offlineStreamDownload(tabId, streamUrl, variantId, jobId = `strea
               )
             : undefined
         );
+    const received =
+      Number(progress.fetched_bytes_count) ||
+      Number(progress.completed_bytes) ||
+      0;
+    const total =
+      Number(progress.total_bytes_count) ||
+      Number(progress.total_bytes) ||
+      0;
+    const elapsedSeconds = Math.max(1, (Date.now() - (offlineStreamJobs.get(jobId)?.createdAt || Date.now())) / 1000);
+    const speedBps = received > 0 ? received / elapsedSeconds : 0;
+    const etaSeconds = speedBps > 0 && total > received
+      ? Math.ceil((total - received) / speedBps)
+      : null;
+    const formatBytes = bytes => bytes >= 1024 * 1024
+      ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+      : bytes >= 1024
+        ? `${(bytes / 1024).toFixed(1)} KB`
+        : `${bytes} B`;
+    const formatEta = seconds => seconds >= 3600
+      ? `${Math.ceil(seconds / 3600)}h`
+      : seconds >= 60
+        ? `${Math.ceil(seconds / 60)}m`
+        : `${seconds}s`;
 
     if (abortController.signal.aborted) return;
     updateOfflineJob(jobId, {
@@ -1468,7 +1648,13 @@ async function offlineStreamDownload(tabId, streamUrl, variantId, jobId = `strea
         percent: Number.isFinite(percent) ? percent : 0,
         detail: progress.total
           ? `${progress.completed}/${progress.total} segments`
-          : 'Downloading stream…'
+          : speedBps > 0
+            ? `${formatBytes(speedBps)}/s${etaSeconds != null ? ` · ETA ${formatEta(etaSeconds)}` : ''}`
+            : 'Downloading stream…',
+        speed: speedBps > 0 ? `${formatBytes(speedBps)}/s` : null,
+        eta: etaSeconds != null ? formatEta(etaSeconds) : null,
+        receivedBytes: received,
+        totalBytes: total
       }
     });
 
@@ -1540,7 +1726,7 @@ async function offlineStreamDownload(tabId, streamUrl, variantId, jobId = `strea
           : {}),
         carry_get_params: false,
         extension,
-        is_youtube: false,
+        is_youtube: Boolean(stream.isYoutube),
         throttle: false,
         cache: 'default',
         duration: 'unknown'
@@ -1600,7 +1786,7 @@ async function offlineStreamDownload(tabId, streamUrl, variantId, jobId = `strea
         entry: variant.workerEntry,
         duration: 'unknown',
         extension,
-        is_youtube: false,
+        is_youtube: Boolean(stream.isYoutube),
         throttle: false,
         cache: 'default'
       };
@@ -1618,6 +1804,46 @@ async function offlineStreamDownload(tabId, streamUrl, variantId, jobId = `strea
 
       workerBlobUrl =
         await workerDownloadUrl(result);
+
+    // ============================================================
+    // YOUTUBE
+    // ============================================================
+    } else if (stream.type === 'YouTube') {
+      if (!variant?.url) {
+        throw new Error('The selected YouTube format is no longer available. Refresh the page and try again.');
+      }
+
+      extension = variant.audioOnly
+        ? 'mp3'
+        : (['mp4', 'webm', 'mkv'].includes(variant.container) ? variant.container : 'mp4');
+      const id = `stream_${crypto.randomUUID()}`;
+      updateOfflineJob(jobId, { workerDownloadId: id });
+      const downloadArgs = {
+        download_id: id,
+        headers: new Headers(headers),
+        good_basename: safeFilename(stream.name, extension).replace(new RegExp(`\\.${extension}$`), ''),
+        subdir: '',
+        save_as: false,
+        will_use_jsfetch: false,
+        strategy: variant.audioOnly
+          ? 'youtube_audio_only'
+          : variant.audioUrl
+            ? 'youtube_audio_video_two_sources'
+            : 'youtube_audio_video_one_source',
+        muxer: extension,
+        url: safeUrlObject(variant.url),
+        ...(variant.audioUrl ? { url_audio: safeUrlObject(variant.audioUrl) } : {}),
+        ...(variant.contentLength > 0 ? { content_length: variant.contentLength } : {}),
+        ...(variant.audioContentLength > 0 ? { audio_content_length: variant.audioContentLength } : {}),
+        carry_get_params: false,
+        extension,
+        is_youtube: true,
+        throttle: false,
+        cache: 'default',
+        duration: stream.duration || 'unknown'
+      };
+      const result = await vdownDownload(downloadArgs, report);
+      workerBlobUrl = await workerDownloadUrl(result);
 
     // ============================================================
     // DIRECT HTTP / MP4 / WEBM / ETC.
@@ -1662,7 +1888,7 @@ async function offlineStreamDownload(tabId, streamUrl, variantId, jobId = `strea
         muxer: extension,
         carry_get_params: false,
         extension,
-        is_youtube: false,
+        is_youtube: Boolean(stream.isYoutube),
         throttle: false,
         cache: 'default'
       };
@@ -1782,6 +2008,14 @@ async function offlineStreamDownload(tabId, streamUrl, variantId, jobId = `strea
 }
 
 function startOfflineStreamDownload(tabId, streamUrl, variantId) {
+  const duplicate = [...offlineStreamJobs.values()].find(job =>
+    job.source === 'stream'
+    && job.status === 'downloading'
+    && job.url === streamUrl
+    && (job.variantId || '') === (variantId || '')
+  );
+  if (duplicate) return duplicate.id;
+
   const jobId = `stream_${crypto.randomUUID()}`;
   // Intentionally do not await this work from the popup message handler. The
   // worker can remux a long stream for minutes; the queue is the authoritative
@@ -1802,10 +2036,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.channel === 0 && msg?.msg?.name === 'on_media') {
     const tabId = sender.tab?.id;
     if (tabId != null) {
-      try { addDetectorMedia(tabId, msg.msg.data?.media, sender.tab?.title || ''); }
+      try { addDetectorMedia(tabId, msg.msg.data?.media, sender.tab?.title || '', sender.tab?.url || ''); }
       catch (error) { console.debug('[VDown detector] ignored malformed media:', error.message || error); }
       sendResponse({ ok: true });
     }
+    return true;
+  }
+
+  if (msg?.channel === 0 && msg?.msg?.name === 'qjs') {
+    void evaluateVdownQjs(msg.msg.data, sender)
+      .catch(error => console.error('[YouTube detector] QuickJS bridge failed:', error))
+      .finally(() => sendResponse({ ok: true }));
     return true;
   }
 
@@ -1860,7 +2101,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         if (msg.action === 'remove' && job) { offlineStreamJobs.delete(job.id); publishOfflineQueue(); }
         if (msg.action === 'clear-completed') {
-          for (const [id, item] of offlineStreamJobs) if (item.status === 'complete' || item.status === 'failed') offlineStreamJobs.delete(id);
+          for (const [id, item] of offlineStreamJobs) {
+            if (['complete', 'failed', 'cancelled'].includes(item.status)) offlineStreamJobs.delete(id);
+          }
           publishOfflineQueue();
         }
         sendResponse({ ok: true });

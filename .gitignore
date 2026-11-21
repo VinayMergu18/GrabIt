@@ -17,6 +17,7 @@ extension/scripts/popup/popup.js.backup2
 server/modules/cookies.js.backup
 server/cache/*
 
+extension/node_modules/
 
 
 #Stable Dates
@@ -46,4 +47,5 @@ GrabIt.code-workspace
 improvements.txt
 integration_missings.md
 vdown working mechanism new.md
+improvements.txt
 improvements.txt

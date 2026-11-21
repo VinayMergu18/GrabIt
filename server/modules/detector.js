@@ -62,9 +62,10 @@ function detectYouTubeType(url) {
     if (u.pathname.includes('/live') || u.searchParams.get('live') === '1') return 'live';
     if (u.pathname.includes('/shorts/')) return 'short';
     if (u.hostname.includes('music.youtube.com')) return 'music';
+    if (hasV) return 'video';
     if (list && list.startsWith('RD')) return 'mix_playlist';
     if (list) return 'playlist';
-    // No list parameter -> treat as a single video
+    // Only playlist URLs without a video id are treated as playlists.
     return 'video';
   } catch {}
   return 'video';
@@ -191,27 +192,43 @@ function formatBadges(f) {
   return badges;
 }
 
-/** Estimate bytes from a format's bitrate + duration. */
+/** Return a byte estimate and whether it is derived from approximate metadata. */
+function estimateFormatSize(f, duration) {
+  const exactSize = Number(f.filesize);
+  if (Number.isFinite(exactSize) && exactSize > 0) {
+    return { bytes: exactSize, estimated: false };
+  }
+
+  const approximateSize = Number(f.filesize_approx);
+  if (Number.isFinite(approximateSize) && approximateSize > 0) {
+    return { bytes: approximateSize, estimated: true };
+  }
+
+  const kbps = [f.tbr, f.vbr, f.abr]
+    .map(Number)
+    .find(value => Number.isFinite(value) && value > 0);
+  const seconds = Number(duration);
+  return {
+    bytes: kbps && Number.isFinite(seconds) && seconds > 0
+      ? Math.round(kbps * 1000 / 8 * seconds)
+      : 0,
+    estimated: true
+  };
+}
+
 function estimateBytes(f, duration) {
-  if (f.filesize)       return f.filesize;
-  if (f.filesize_approx) return f.filesize_approx;
-  const kbps = f.tbr || f.vbr || f.abr;
-  return kbps && duration ? Math.round(kbps * 1000 / 8 * duration) : 0;
+  return estimateFormatSize(f, duration).bytes;
 }
 
 // ── Video format builder ──────────────────────────────────────────────────────
 
-const TIER_HEIGHTS = [144, 240, 360, 480, 720, 1080, 1440, 2160];
-
 /**
- * Build the full video-format resolution ladder from yt-dlp metadata.
+ * Build the actual video-format list from yt-dlp metadata.
  *
- * For each standard tier (144p → 2160p):
- *   - Find the best video-only stream ≤ that height (highest bitrate wins on tie)
- *   - Attach codec, FPS, HDR badges, estimated size (video + best audio)
- *   - Mark tiers with no matching stream as unavailable
+ * Each row represents a source resolution that exists. Video-only formats
+ * include the best audio companion in their size; estimates are marked.
  *
- * Returns an array ordered by height ASC, then a "Recommended" entry last.
+ * Returns formats ordered by height DESC with the recommended format marked.
  */
 function buildVideoFormats(meta) {
   const dur       = meta.duration || 0;
@@ -219,9 +236,10 @@ function buildVideoFormats(meta) {
 
   // Audio companion for merged-size estimates
   const audioOnly = allFmts.filter(f => (!f.vcodec || f.vcodec === 'none') && f.acodec && f.acodec !== 'none');
-  const bestAudio  = audioOnly.sort((a, b) =>
-    (estimateBytes(b, dur)) - (estimateBytes(a, dur)) || (b.abr || 0) - (a.abr || 0))[0] || null;
-  const audioBytes = bestAudio ? (estimateBytes(bestAudio, dur) || 0) : 0;
+  const bestAudio = audioOnly.sort((a, b) =>
+    estimateBytes(b, dur) - estimateBytes(a, dur) || (b.abr || 0) - (a.abr || 0))[0] || null;
+  const audioSize = bestAudio ? estimateFormatSize(bestAudio, dur) : { bytes: 0, estimated: true };
+  const audioBytes = audioSize.bytes;
 
   // Video-only streams, grouped by height → keep highest-tbr per height
   const videoOnly = allFmts.filter(f => f.vcodec && f.vcodec !== 'none' && f.height && (!f.acodec || f.acodec === 'none'));
@@ -232,64 +250,63 @@ function buildVideoFormats(meta) {
     if (!byHeight[h] || score > (byHeight[h].tbr || byHeight[h].vbr || 0)) byHeight[h] = f;
   }
 
-  // All available heights, sorted descending for fast lookup
-  const availHeights = Object.keys(byHeight).map(Number).sort((a, b) => b - a);
-
-  const tiers = TIER_HEIGHTS.map(height => {
-    // Best stream at or below this tier
-    const h = availHeights.find(ah => ah <= height);
-    if (!h) return { label: `${height}p`, height, available: false, size: null, codec: null, fps: null, badges: [] };
-
-    const f      = byHeight[h];
-    const vBytes = estimateBytes(f, dur);
-    const size   = (vBytes + audioBytes) || null;
+  const availableHeights = Object.keys(byHeight).map(Number).sort((a, b) => b - a);
+  const tiers = availableHeights.map(height => {
+    const f = byHeight[height];
+    const videoSize = estimateFormatSize(f, dur);
+    const size = bestAudio ? videoSize.bytes + audioBytes : 0;
 
     return {
       label:     `${height}p`,
-      height,
+      height:    Number(height),
       format_id: f.format_id,
       ext:       'mp4',
       codec:     codecLabel(f.vcodec),
       fps:       f.fps  ? Math.round(f.fps)  : null,
       bitrate:   f.tbr  ? Math.round(f.tbr)  : null, // kbps
       badges:    formatBadges(f),
-      size,
+      size:      size || null,
+      sizeIsEstimate: videoSize.estimated || !bestAudio || audioSize.estimated,
       available: true,
       isRecommended: false
     };
   });
 
   // Recommended: best at or under 720p (sweet spot for size/quality)
-  const recH = availHeights.find(h => h <= 720) || availHeights[availHeights.length - 1];
-  if (recH) {
-    const f      = byHeight[recH];
-    const vBytes = estimateBytes(f, dur);
-    tiers.push({
-      label: 'Recommended', height: recH, format_id: f.format_id, ext: 'mp4',
-      codec: codecLabel(f.vcodec), fps: f.fps ? Math.round(f.fps) : null,
-      bitrate: f.tbr ? Math.round(f.tbr) : null,
-      badges: formatBadges(f),
-      size: (vBytes + audioBytes) || null,
-      available: true, isRecommended: true
-    });
-  }
+  const recommended = tiers.find(tier => tier.height <= 720) || tiers[tiers.length - 1];
+  if (recommended) recommended.isRecommended = true;
 
   // Fallback: use combined streams if no video-only found
-  if (!tiers.some(t => t.available && !t.isRecommended)) {
+  if (tiers.length === 0) {
     const combined = allFmts.filter(f => f.vcodec && f.vcodec !== 'none' && f.height)
       .sort((a, b) => (b.height - a.height) || ((b.tbr || 0) - (a.tbr || 0)));
-    for (const tier of tiers) {
-      if (tier.isRecommended) continue;
-      const f = combined.find(c => c.height <= tier.height);
-      if (f) Object.assign(tier, {
-        format_id: f.format_id, codec: codecLabel(f.vcodec),
-        fps: f.fps ? Math.round(f.fps) : null, badges: formatBadges(f),
-        size: estimateBytes(f, dur) || null, available: true
+    const byCombinedHeight = new Map();
+    for (const format of combined) {
+      if (!byCombinedHeight.has(format.height)) byCombinedHeight.set(format.height, format);
+    }
+    for (const [height, format] of byCombinedHeight) {
+      const sizeEstimate = estimateFormatSize(format, dur);
+      tiers.push({
+        label: `${height}p`,
+        height,
+        format_id: format.format_id,
+        ext: format.ext,
+        codec: codecLabel(format.vcodec),
+        fps: format.fps ? Math.round(format.fps) : null,
+        bitrate: format.tbr ? Math.round(format.tbr) : null,
+        badges: formatBadges(format),
+        size: sizeEstimate.bytes || null,
+        sizeIsEstimate: sizeEstimate.estimated,
+        available: true,
+        isRecommended: false
       });
     }
+    tiers.sort((a, b) => b.height - a.height);
+    const fallbackRecommended = tiers.find(tier => tier.height <= 720) || tiers[tiers.length - 1];
+    if (fallbackRecommended) fallbackRecommended.isRecommended = true;
   }
 
-  return { tiers, audioBytes, bestAudio };
+  return { tiers, audioBytes, bestAudio, audioSize };
 }
 
 // ── Audio format builder ──────────────────────────────────────────────────────
@@ -322,7 +339,8 @@ function buildAudioFormats(meta) {
   const sourceIsOpus  = realACodec.toLowerCase().includes('opus');
   const sourceIsAAC   = realACodec.toLowerCase().startsWith('mp4a') || realACodec === 'aac';
   const sourceIsVorbis= realACodec.toLowerCase().includes('vorbis');
-  const realBytes     = best ? (estimateBytes(best, dur) || 0) : 0;
+  const realSize      = best ? estimateFormatSize(best, dur) : { bytes: 0, estimated: true };
+  const realBytes     = realSize.bytes;
 
   // Output format specs: [fmt, label, maxKbps, star, isLossless]
   const SPECS = [
@@ -342,26 +360,29 @@ function buildAudioFormats(meta) {
                      (fmt === 'opus' && sourceIsOpus) ||
                      (fmt === 'ogg' && sourceIsVorbis);
 
-    let size, bitrate;
+    let size, bitrate, sizeIsEstimate;
     if (isDirect && realBytes) {
       // Copy the actual measured bytes
       size    = realBytes;
       bitrate = realAbr;
+      sizeIsEstimate = realSize.estimated;
     } else if (isLossless) {
       // Lossless: estimate from full PCM rate then compression ratio
       const pcmKbps = realAsr ? (realAsr * 16 * 2 / 1000) : 1411; // 16-bit stereo PCM
       const kbps    = fmt === 'flac' ? Math.round(pcmKbps * 0.55) : pcmKbps;
       size    = dur ? Math.round(kbps * 1000 / 8 * dur) : null;
       bitrate = kbps;
+      sizeIsEstimate = true;
     } else {
       // Lossy: cap at source bitrate to avoid inflating output estimate
       const kbps = realAbr ? Math.min(realAbr, maxKbps) : maxKbps;
       size    = dur ? Math.round(kbps * 1000 / 8 * dur) : null;
       bitrate = kbps;
+      sizeIsEstimate = true;
     }
 
     return {
-      fmt, label, star, size, isDirect,
+      fmt, label, star, size, sizeIsEstimate, isDirect,
       bitrate: bitrate ? Math.round(bitrate) : null,
       codec:   acodecLabel(isDirect ? realACodec : fmt),
       sampleRate: realAsr || null
@@ -440,6 +461,7 @@ function buildFullFormatsFromMeta(meta) {
     ? tiers.map(f => ({
         ...f,
         size: f.size ? f.size + subtitleInfo.subOverheadBytes : f.size,
+        sizeIsEstimate: f.sizeIsEstimate || subtitleInfo.subOverheadBytes > 0,
         label: f.isRecommended ? 'Recommended' : f.label
       }))
     : tiers.map(f => ({ ...f, available: false }));
@@ -481,7 +503,7 @@ function buildYouTubeResult(url, meta, type) {
     subtitleInfo:    formats.subtitleInfo,
     hasSubtitles:    formats.subtitleInfo.hasSubtitles,
     subtitleLangs:   formats.subtitleInfo.languages.map(l => l.code),
-    estimatedSize:   meta.filesize_approx || null,
+    estimatedSize:   formats.videoFormats.find(format => format.available)?.size || null,
     actions:         getYouTubeActions(isLive ? 'live' : (type || 'video')),
     stage:           2
   };
